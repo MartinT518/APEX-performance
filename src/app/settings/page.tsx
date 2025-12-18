@@ -1,191 +1,240 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { usePhenotypeStore } from '@/modules/monitor/phenotypeStore';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useToast, ToastContainer } from '@/components/ui/toast';
 import { ErrorBoundary } from '@/components/errors/ErrorBoundary';
+import { usePhenotypeStore } from '@/modules/monitor/phenotypeStore';
+import { Activity, ShieldAlert, Save, Info } from 'lucide-react';
+import { logger } from '@/lib/logger';
+import { useToast, ToastContainer } from '@/components/ui/toast';
+
+const injuries = ["Patellar Tendon", "Achilles Tendon", "IT Band", "Plantar Fascia", "Glute/Hamstring", "Lower Back"];
+
+// Map injury names to database enum values
+const injuryMap: Record<string, 'patellar_tendon' | 'achilles' | 'it_band' | 'plantar_fascia' | 'glute_med' | 'lower_back'> = {
+  "Patellar Tendon": 'patellar_tendon',
+  "Achilles Tendon": 'achilles',
+  "IT Band": 'it_band',
+  "Plantar Fascia": 'plantar_fascia',
+  "Glute/Hamstring": 'glute_med',
+  "Lower Back": 'lower_back'
+};
+
+const reverseInjuryMap: Record<string, string> = {
+  'patellar_tendon': "Patellar Tendon",
+  'achilles': "Achilles Tendon",
+  'it_band': "IT Band",
+  'plantar_fascia': "Plantar Fascia",
+  'glute_med': "Glute/Hamstring",
+  'lower_back': "Lower Back"
+};
 
 function SettingsContent() {
-  const { profile, loadProfile, toggleHighRevMode, updateConfig } = usePhenotypeStore();
-  const [isClient, setIsClient] = useState(false);
+  const { profile, loadProfile, updateConfig, toggleHighRevMode } = usePhenotypeStore();
+  const [isHighRev, setIsHighRev] = useState(false);
+  const [maxHeartRate, setMaxHeartRate] = useState(185);
+  const [thresholdHeartRate, setThresholdHeartRate] = useState<number | null>(null);
+  const [injuryHistory, setInjuryHistory] = useState<string[]>([]);
+  const [liftFrequency, setLiftFrequency] = useState(3);
+  const [isLoading, setIsLoading] = useState(true);
   const toast = useToast();
 
+  // Load profile once on mount - don't include profile in deps to avoid infinite loop
   useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  useEffect(() => {
-    // Always reload profile to ensure we have the real one from Supabase, not mock data
-    if (isClient) {
-      if (!profile || profile.id === 'phoenix_high_rev_01') {
-        loadProfile();
+    let cancelled = false;
+    
+    loadProfile().then(() => {
+      if (cancelled) return;
+      
+      // Access profile directly from store to avoid dependency on reactive value
+      const currentProfile = usePhenotypeStore.getState().profile;
+      if (currentProfile) {
+        setIsHighRev(currentProfile.is_high_rev);
+        setMaxHeartRate(currentProfile.config.max_hr_override);
+        setThresholdHeartRate(currentProfile.config.threshold_hr_known || null);
+        setLiftFrequency(currentProfile.config.lift_days_required);
+        
+        // Convert database enum values to display names
+        const displayInjuries = (currentProfile.config.structural_weakness || []).map(
+          (weakness: string) => reverseInjuryMap[weakness] || weakness
+        );
+        setInjuryHistory(displayInjuries);
       }
-    }
-  }, [isClient]);
+      setIsLoading(false);
+    });
+    
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount - loadProfile is stable, profile would cause infinite loop
 
-  if (!isClient || !profile) return <div className="p-8 text-white">Loading Phenotype...</div>;
+  const toggleInjury = (injury: string) => {
+    setInjuryHistory(prev => prev.includes(injury) ? prev.filter(i => i !== injury) : [...prev, injury]);
+  };
+
+  const handleSave = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Update high-rev mode if changed
+      if (isHighRev !== profile?.is_high_rev) {
+        await toggleHighRevMode(isHighRev);
+      }
+
+      // Convert injury display names back to database enum values
+      const dbInjuries = injuryHistory.map(injury => injuryMap[injury]).filter(Boolean) as string[];
+
+      // Update config
+      await updateConfig({
+        max_hr_override: maxHeartRate,
+        threshold_hr_known: thresholdHeartRate || undefined,
+        structural_weakness: dbInjuries,
+        lift_days_required: liftFrequency
+      });
+
+      toast.success('Saved', 'Phenotype configuration updated successfully');
+    } catch (err) {
+      logger.error('Failed to save phenotype', err);
+      toast.error('Save Failed', err instanceof Error ? err.message : 'Failed to save configuration');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading && !profile) {
+    return (
+      <div className="space-y-6 pb-24 p-4">
+        <div className="flex items-center justify-center h-64">
+          <p className="text-slate-400">Loading settings...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-black text-white p-8 font-sans">
+    <div className="space-y-6 pb-24 p-4 animate-in fade-in duration-300">
       <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
-       <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight mb-2">Phenotype Settings</h1>
-        <p className="text-zinc-400">Configure your physiological parameters.</p>
-      </header>
       
-      <div className="max-w-xl space-y-6">
-        {/* High Rev Toggle */}
-        <Card className="border-zinc-800 bg-zinc-950 text-white">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-            <div className="space-y-1">
-              <CardTitle className="text-base">High-Rev Physiology</CardTitle>
-              <CardDescription>Enable if your steady-state HR exceeds 170bpm.</CardDescription>
-            </div>
-            <div className="flex items-center space-x-2">
-                <input 
-                    type="checkbox" 
-                    className="w-6 h-6 rounded border-zinc-700 bg-zinc-900 text-green-500 focus:ring-green-500 accent-green-500"
-                    checked={profile.is_high_rev}
-                    onChange={async (e) => {
-                      try {
-                        await toggleHighRevMode(e.target.checked);
-                        toast.success('Settings Updated', 'High-Rev mode updated successfully');
-                      } catch (err) {
-                        toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update settings');
-                      }
-                    }}
-                />
-            </div>
-          </CardHeader>
-        </Card>
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold text-white tracking-tight">Phenotype Configuration</h1>
+        <p className="text-slate-400 text-sm mt-1">
+          Define your biological truth. This data overrides standard algorithms.
+        </p>
+      </header>
 
-        {/* Max HR Input */}
-        <Card className="border-zinc-800 bg-zinc-950 text-white">
-          <CardHeader>
-            <CardTitle className="text-base">Max Heart Rate Override</CardTitle>
-            <CardDescription>The absolute ceiling for your engine. Used for Zone calcs.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center space-x-4">
-                <input 
-                    type="number" 
-                    className="flex h-10 w-full rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    value={profile.config.max_hr_override}
-                    onChange={async (e) => {
-                      try {
-                        await updateConfig({ max_hr_override: parseInt(e.target.value) || 0 });
-                        toast.success('Settings Updated', 'Max HR updated successfully');
-                      } catch (err) {
-                        toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update settings');
-                      }
-                    }}
-                />
-                <span className="text-zinc-500">bpm</span>
-            </div>
-          </CardContent>
-        </Card>
+      <section className="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Activity className="text-emerald-400 w-5 h-5" />
+            <h2 className="font-semibold text-lg">High-Rev Mode</h2>
+          </div>
+          <button 
+            onClick={() => setIsHighRev(!isHighRev)}
+            className={`w-12 h-6 rounded-full transition-colors relative ${isHighRev ? 'bg-emerald-500' : 'bg-slate-700'}`}
+          >
+            <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-transform ${isHighRev ? 'left-7' : 'left-1'}`} />
+          </button>
+        </div>
 
-        {/* Threshold HR Input */}
-        <Card className="border-zinc-800 bg-zinc-950 text-white">
-          <CardHeader>
-            <CardTitle className="text-base">Lactate Threshold HR</CardTitle>
-            <CardDescription>Known Lactate Threshold from lab/field test. Optional but recommended.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center space-x-4">
-                <input 
-                    type="number" 
-                    className="flex h-10 w-full rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    value={profile.config.threshold_hr_known || ''}
-                    placeholder="e.g., 179"
-                    onChange={async (e) => {
-                      try {
-                        await updateConfig({ threshold_hr_known: e.target.value ? parseInt(e.target.value) : undefined });
-                        toast.success('Settings Updated', 'Threshold HR updated successfully');
-                      } catch (err) {
-                        toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update settings');
-                      }
-                    }}
-                />
-                <span className="text-zinc-500">bpm</span>
-            </div>
-          </CardContent>
-        </Card>
+        {isHighRev ? (
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 mb-4 flex gap-3">
+            <Info className="text-emerald-400 w-10 h-10 shrink-0" />
+            <p className="text-xs text-emerald-100">
+              <strong>Phoenix Protocol Active:</strong> Standard anaerobic warnings are disabled. 
+              System will validate sustained high HR ({'>'}90% Max) as "Threshold" rather than "Error."
+            </p>
+          </div>
+        ) : (
+          <div className="bg-slate-800 rounded-lg p-3 mb-4">
+            <p className="text-xs text-slate-400">
+              Enable this if your marathon heart rate averages {'>'}175 bpm.
+            </p>
+          </div>
+        )}
 
-        {/* Required Lift Days Per Week */}
-        <Card className="border-zinc-800 bg-zinc-950 text-white">
-          <CardHeader>
-            <CardTitle className="text-base">Required Lift Days Per Week</CardTitle>
-            <CardDescription>Minimum strength sessions per week to maintain chassis integrity.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center space-x-4">
-                <input 
-                    type="number" 
-                    min="0"
-                    max="7"
-                    className="flex h-10 w-full rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    value={profile.config.lift_days_required || 0}
-                    onChange={async (e) => {
-                      try {
-                        await updateConfig({ lift_days_required: parseInt(e.target.value) || 0 });
-                        toast.success('Settings Updated', 'Lift days requirement updated successfully');
-                      } catch (err) {
-                        toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update settings');
-                      }
-                    }}
-                />
-                <span className="text-zinc-500">days/week</span>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">TRUE MAX HEART RATE (BPM)</label>
+            <div className="relative">
+              <input 
+                type="number" 
+                value={maxHeartRate}
+                onChange={(e) => setMaxHeartRate(parseInt(e.target.value) || 185)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <span className="absolute right-3 top-4 text-xs text-slate-500">Override 220-Age</span>
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {/* Structural Weaknesses */}
-         <Card className="border-zinc-800 bg-zinc-950 text-white">
-          <CardHeader>
-            <CardTitle className="text-base">Injury History / Structural Weaknesses</CardTitle>
-            <CardDescription>Known points of failure (CSIDs). Select all that apply.</CardDescription>
-          </CardHeader>
-          <CardContent>
-             <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                    {(['patellar_tendon', 'glute_med', 'achilles', 'lower_back', 'plantar_fascia', 'hip_flexor', 'it_band'] as const).map((weakness) => {
-                        const isSelected = profile.config.structural_weakness.includes(weakness);
-                        return (
-                            <button
-                                key={weakness}
-                                onClick={async () => {
-                                    try {
-                                      const current = profile.config.structural_weakness;
-                                      const updated = isSelected
-                                          ? current.filter(w => w !== weakness)
-                                          : [...current, weakness];
-                                      await updateConfig({ structural_weakness: updated });
-                                      toast.success('Settings Updated', 'Structural weaknesses updated successfully');
-                                    } catch (err) {
-                                      toast.error('Update Failed', err instanceof Error ? err.message : 'Failed to update settings');
-                                    }
-                                }}
-                                className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                                    isSelected
-                                        ? 'bg-red-900/30 text-red-500 border-red-900 hover:bg-red-900/40'
-                                        : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:bg-zinc-800'
-                                }`}
-                            >
-                                {weakness.replace(/_/g, ' ')}
-                            </button>
-                        );
-                    })}
-                </div>
-                {profile.config.structural_weakness.length === 0 && (
-                    <p className="text-xs text-zinc-500 italic">No structural weaknesses selected.</p>
-                )}
-             </div>
-          </CardContent>
-        </Card>
-      </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">LACTATE THRESHOLD HR (BPM)</label>
+            <input 
+              type="number" 
+              value={thresholdHeartRate || ''}
+              onChange={(e) => setThresholdHeartRate(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <ShieldAlert className="text-amber-400 w-5 h-5" />
+          <h2 className="font-semibold text-lg">Chassis Configuration</h2>
+        </div>
+
+        <div className="space-y-6">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-2">MANDATORY STRENGTH SESSIONS (PER WEEK)</label>
+            <div className="flex items-center gap-4 bg-slate-950 p-3 rounded-lg border border-slate-700">
+              <button 
+                onClick={() => setLiftFrequency(Math.max(0, liftFrequency - 1))} 
+                className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded text-xl hover:bg-slate-700 transition-colors"
+              >
+                -
+              </button>
+              <span className="flex-1 text-center font-mono text-lg">{liftFrequency}</span>
+              <button 
+                onClick={() => setLiftFrequency(liftFrequency + 1)} 
+                className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded text-xl hover:bg-slate-700 transition-colors"
+              >
+                +
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">*Falling below this triggers an Agent A Veto on intensity.</p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-2">STRUCTURAL WEAKNESSES (INJURY HISTORY)</label>
+            <div className="flex flex-wrap gap-2">
+              {injuries.map((injury) => (
+                <button
+                  key={injury}
+                  onClick={() => toggleInjury(injury)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                    injuryHistory.includes(injury)
+                      ? 'bg-red-500/20 text-red-400 border border-red-500/50'
+                      : 'bg-slate-800 text-slate-400 border border-transparent hover:border-slate-600'
+                  }`}
+                >
+                  {injury}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <button 
+        onClick={handleSave} 
+        disabled={isLoading}
+        className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:cursor-not-allowed text-slate-950 font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
+      >
+        <Save className="w-5 h-5" />
+        LOCK PHENOTYPE
+      </button>
     </div>
   );
 }

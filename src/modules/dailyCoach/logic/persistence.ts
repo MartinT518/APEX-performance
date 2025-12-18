@@ -1,7 +1,18 @@
 import { createServerClient } from '@/lib/supabase';
 import type { SessionProcessingResult } from './sessionProcessor';
+import type { Database } from '@/types/database';
 import { logger } from '@/lib/logger';
 import { sanitizeErrorMessage } from '@/lib/errorSanitizer';
+
+// Type for session_logs insert - matches database schema
+interface SessionLogInsert {
+  user_id: string;
+  session_date: string;
+  sport_type: 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER';
+  duration_minutes: number;
+  source?: 'garmin_health' | 'manual_upload' | 'test_mock';
+  metadata?: Database['public']['Tables']['session_logs']['Row']['metadata'] | null;
+}
 
 export interface SessionLogData {
   sessionDate: string;
@@ -32,22 +43,39 @@ export async function persistSessionLog(
       return { success: false, error: 'No authenticated user' };
     }
 
-    const { data, error } = await supabase
+    const insertData: SessionLogInsert = {
+      user_id: userId,
+      session_date: sessionData.sessionDate,
+      sport_type: sessionData.sportType,
+      duration_minutes: sessionData.durationMinutes,
+      source: sessionData.source,
+      metadata: (sessionData.metadata as Database['public']['Tables']['session_logs']['Row']['metadata']) || null
+    };
+
+    // Type assertion needed due to TypeScript type inference limitation with session_logs table
+    // Runtime is safe - table exists in database and RLS policies are enforced
+    const supabaseClient = supabase as unknown as {
+      from: (table: string) => {
+        insert: (data: SessionLogInsert) => {
+          select: (columns: string) => {
+            single: () => Promise<{ data: { id: string } | null; error: unknown }>;
+          };
+        };
+      };
+    };
+
+    const { data, error } = await supabaseClient
       .from('session_logs')
-      .insert({
-        user_id: userId,
-        session_date: sessionData.sessionDate,
-        sport_type: sessionData.sportType,
-        duration_minutes: sessionData.durationMinutes,
-        source: sessionData.source,
-        metadata: sessionData.metadata || null
-      })
+      .insert(insertData)
       .select('id')
       .single();
 
-    if (error) {
-      logger.error('Failed to persist session log', error);
-      return { success: false, error: sanitizeErrorMessage(error) };
+    if (error || !data) {
+      if (error) {
+        logger.error('Failed to persist session log', error);
+        return { success: false, error: sanitizeErrorMessage(error) };
+      }
+      return { success: false, error: 'Failed to create session log' };
     }
 
     logger.info(`Session logged: ${data.id}`);
@@ -61,7 +89,7 @@ export async function persistSessionLog(
 /**
  * Validates and sanitizes metadata before storage
  */
-function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+export function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   
   // Limit string lengths to prevent storage bloat
@@ -79,6 +107,41 @@ function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unk
   }
   if (typeof metadata.pointCount === 'number') {
     sanitized.pointCount = metadata.pointCount;
+  }
+  
+  // Store enhanced metrics from Garmin
+  if (typeof metadata.distanceKm === 'number') {
+    sanitized.distanceKm = metadata.distanceKm;
+  }
+  if (typeof metadata.distanceInMeters === 'number') {
+    sanitized.distanceInMeters = metadata.distanceInMeters;
+  }
+  if (metadata.avgPace) {
+    sanitized.avgPace = String(metadata.avgPace).slice(0, 20);
+  }
+  if (typeof metadata.averagePace === 'number') {
+    sanitized.averagePace = metadata.averagePace;
+  }
+  if (typeof metadata.avgHR === 'number') {
+    sanitized.avgHR = metadata.avgHR;
+  }
+  if (typeof metadata.maxHR === 'number') {
+    sanitized.maxHR = metadata.maxHR;
+  }
+  if (typeof metadata.avgRunCadence === 'number') {
+    sanitized.avgRunCadence = metadata.avgRunCadence;
+  }
+  if (typeof metadata.calories === 'number') {
+    sanitized.calories = metadata.calories;
+  }
+  if (typeof metadata.elevationGain === 'number') {
+    sanitized.elevationGain = metadata.elevationGain;
+  }
+  if (metadata.trainingType) {
+    sanitized.trainingType = String(metadata.trainingType).slice(0, 50);
+  }
+  if (typeof metadata.durationMinutes === 'number') {
+    sanitized.durationMinutes = metadata.durationMinutes;
   }
   
   // Only store essential diagnostics fields
@@ -99,7 +162,8 @@ function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unk
  */
 export function sessionResultToLogData(
   result: SessionProcessingResult,
-  durationMinutes: number
+  durationMinutes: number,
+  sessionDate?: string // Allow passing custom date for historical sync
 ): SessionLogData {
   const sportType: 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER' = 
     result.metadata?.dataSource === 'GARMIN' ? 'RUNNING' : 'OTHER';
@@ -107,17 +171,59 @@ export function sessionResultToLogData(
   const source: 'garmin_health' | 'manual_upload' | 'test_mock' = 
     result.metadata?.dataSource === 'GARMIN' ? 'garmin_health' : 'test_mock';
 
+  // Extract metrics from data points if available
+  const validPoints = result.points.filter(p => p.heartRate && p.heartRate > 0);
+  const avgHR = validPoints.length > 0
+    ? Math.round(validPoints.reduce((sum, p) => sum + (p.heartRate || 0), 0) / validPoints.length)
+    : undefined;
+  
+  const maxHR = validPoints.length > 0
+    ? Math.max(...validPoints.map(p => p.heartRate || 0))
+    : undefined;
+
+  // Calculate distance from speed if available
+  let distanceKm: number | undefined;
+  if (result.points.length > 0 && result.points[0].speed) {
+    // Sum up distance from speed * time intervals
+    let totalDistance = 0;
+    for (let i = 1; i < result.points.length; i++) {
+      const prevPoint = result.points[i - 1];
+      const currPoint = result.points[i];
+      if (prevPoint.speed && currPoint.timestamp && prevPoint.timestamp) {
+        const timeDiff = (currPoint.timestamp - prevPoint.timestamp) / 1000; // seconds
+        totalDistance += (prevPoint.speed * timeDiff) / 1000; // convert m/s * s to km
+      }
+    }
+    distanceKm = totalDistance > 0 ? totalDistance : undefined;
+  }
+
+  // Calculate pace from distance and duration
+  let pace: string | undefined;
+  if (distanceKm && durationMinutes > 0) {
+    const paceSeconds = (durationMinutes * 60) / distanceKm;
+    const minutes = Math.floor(paceSeconds / 60);
+    const seconds = Math.floor(paceSeconds % 60);
+    pace = `${minutes}:${seconds.toString().padStart(2, '0')}/km`;
+  }
+
   const rawMetadata = {
     dataSource: result.metadata?.dataSource || 'NONE',
     activityId: result.metadata?.activityId,
     activityName: result.metadata?.activityName,
     timestamp: result.metadata?.timestamp,
     pointCount: result.points.length,
-    diagnostics: result.diagnostics
+    diagnostics: result.diagnostics,
+    cadenceLockDetected: result.cadenceLockDetected || false,
+    // Enhanced metrics
+    distanceKm,
+    avgPace: pace,
+    avgHR,
+    maxHR,
+    durationMinutes
   };
 
   return {
-    sessionDate: new Date().toISOString().split('T')[0],
+    sessionDate: sessionDate || new Date().toISOString().split('T')[0],
     sportType,
     durationMinutes,
     source,

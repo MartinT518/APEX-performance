@@ -1,0 +1,1133 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Activity, 
+  LayoutDashboard, 
+  Calendar, 
+  History, 
+  FlaskConical, 
+  AlertTriangle, 
+  CheckCircle2, 
+  XCircle, 
+  ArrowRight, 
+  Dumbbell, 
+  TrendingUp, 
+  Zap,
+  Menu,
+  Timer,
+  RefreshCw,
+  Droplets,
+  ChevronLeft,
+  Clock,
+  Flame,
+  ClipboardCheck,
+  PlayCircle,
+  Settings,
+  ShieldAlert,
+  Save,
+  Info,
+  Hammer,
+  AlertOctagon,
+  FileBarChart,
+  Target
+} from 'lucide-react';
+
+// --- TYPES ---
+type View = 'dashboard' | 'plan' | 'history' | 'lab' | 'settings';
+type PlanSubView = 'list' | 'detail';
+
+interface SessionDetail {
+  id: number;
+  day: string;
+  title: string;
+  type: 'KEY' | 'REST' | 'REC' | 'STR' | 'EXEC' | 'SUB'; 
+  load: 'LOW' | 'MED' | 'EXTREME' | number; // Number for actual load in history
+  duration: string;
+  objective: string;
+  protocol?: {
+    warmup: string;
+    main: string[]; 
+    cooldown: string;
+  };
+  constraints?: string[];
+  fueling?: {
+    target: string;
+    timeline: { time: string; action: string }[];
+  };
+  checklist?: string[];
+  // POST-MORTEM SPECIFIC FIELDS
+  integrity?: 'VALID' | 'SUSPECT';
+  agentFeedback?: {
+    structural: string;
+    metabolic: string;
+  };
+  hiddenVariables?: {
+    niggle: number;
+    strengthTier: string;
+    giDistress?: number;
+  };
+}
+
+// --- MOCK DATA ---
+const SESSIONS_LOG: SessionDetail[] = [
+  { 
+    id: 1, 
+    type: 'EXEC', 
+    day: 'Today', 
+    title: '15km Threshold Run', 
+    integrity: 'VALID', 
+    load: 140, 
+    duration: '1h 05m',
+    objective: 'Primary Goal: Lactate clearance at 178bpm.',
+    agentFeedback: { 
+      structural: 'GREEN. Cadence held >175spm despite fatigue.', 
+      metabolic: 'GREEN. Decoupling < 1.5%.' 
+    },
+    hiddenVariables: {
+      niggle: 2,
+      strengthTier: 'NONE',
+      giDistress: 1
+    }
+  },
+  { 
+    id: 2, 
+    type: 'SUB', 
+    day: 'Yesterday', 
+    title: '60min Cycling Intervals', 
+    integrity: 'VALID', 
+    load: 110, 
+    duration: '60m',
+    objective: 'Substitution for Run due to Structural Veto.',
+    agentFeedback: { 
+      structural: 'RED. Pain triggered Substitution Matrix.', 
+      metabolic: 'GREEN. HR Targets matched on bike.' 
+    },
+    hiddenVariables: {
+      niggle: 4,
+      strengthTier: 'MAIN'
+    }
+  },
+  { 
+    id: 3, 
+    type: 'EXEC', 
+    day: 'Mon', 
+    title: 'Zone 2 Base Build', 
+    integrity: 'SUSPECT', 
+    load: 95, 
+    duration: '50m',
+    objective: 'Mitochondrial density.',
+    agentFeedback: { 
+      structural: 'GREEN', 
+      metabolic: 'AMBER. Sensor dropout detected at min 24.' 
+    },
+    hiddenVariables: {
+      niggle: 1,
+      strengthTier: 'HYPER'
+    }
+  },
+];
+
+const UPCOMING_SESSIONS: SessionDetail[] = [
+  { 
+    id: 101, 
+    day: 'Friday', 
+    title: 'Chassis Hardening (HLRT)', 
+    type: 'STR', 
+    load: 'MED',
+    duration: '60 min',
+    objective: 'Max Force Production & Tendon Stiffness. We are building the armor to withstand the 32km impact tomorrow.',
+    protocol: {
+      warmup: '10 min Mobility (Hips/Ankles) + Core Activation',
+      main: [
+        'A1. Hex Bar Deadlift: 4 x 5 @ 85% 1RM',
+        'A2. Box Jumps: 4 x 3 (Max Height)',
+        'B1. Bulgarian Split Squat: 3 x 8/leg (Heavy)',
+        'B2. Soleus Calf Raises: 3 x 12 (Slow Eccentric)'
+      ],
+      cooldown: '5 min Dead Hangs & Decompression'
+    },
+    constraints: [
+      'Leave 2 Reps In Reserve (RIR 2)', 
+      'Perfect Form > Weight',
+      'Rest 3 min between heavy sets'
+    ],
+    checklist: ['No acute back pain', 'Protein shake ready post-lift']
+  },
+  { 
+    id: 102, 
+    day: 'Saturday', 
+    title: '32km Simulation Run', 
+    type: 'KEY', 
+    load: 'EXTREME',
+    duration: '2h 15m',
+    objective: 'Glycogen Depletion Management. Simulate the final 10km of the marathon. Teach the brain to fire tired muscle fibers efficiently.',
+    protocol: {
+      warmup: '15 min Easy (HR < 145)',
+      main: [
+        '3 x 5km @ Marathon Pace (Target: 3:33/km)',
+        'Recovery: 1km Float (4:00/km) between reps'
+      ],
+      cooldown: '10 min flush jog'
+    },
+    constraints: [
+      'HR Cap: Do not exceed 188 bpm (High-Rev Limit)', 
+      'Cadence: Maintain >178 spm when fatigued'
+    ],
+    fueling: {
+      target: '90g Carbs/Hour',
+      timeline: [
+        { time: '00:00', action: 'Gel 1 + Water' },
+        { time: '00:30', action: 'Gel 2' },
+        { time: '00:60', action: 'Gel 3 + Caffeine' },
+        { time: '01:30', action: 'Gel 4' }
+      ]
+    },
+    checklist: ['Sleep > 7h', 'Niggle Score < 3', 'Legs Status: Green', 'Carb Load: 400g yesterday']
+  },
+  { 
+    id: 103, 
+    day: 'Sunday', 
+    title: 'Aerobic Flush (Bike)', 
+    type: 'REC', 
+    load: 'LOW',
+    duration: '60 min',
+    objective: 'Non-impact blood flow to accelerate recovery from the 32km run.',
+    protocol: {
+      warmup: '10 min spin',
+      main: ['40 min steady Zone 1 Power'],
+      cooldown: '10 min spin'
+    },
+    constraints: ['Cadence > 90 rpm', 'Power < 150w'],
+    checklist: ['Niggle Score Checked']
+  },
+];
+
+// --- COMPONENTS ---
+
+// 1. SUBSTITUTION MODAL
+const SubstitutionModal = ({ 
+  isOpen, 
+  onAccept, 
+  onCancel 
+}: { 
+  isOpen: boolean, 
+  onAccept: () => void, 
+  onCancel: () => void 
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+      <div className="bg-slate-900 w-full max-w-md rounded-2xl border-2 border-red-500 shadow-2xl shadow-red-900/40 overflow-hidden">
+        <div className="bg-red-500/10 p-4 border-b border-red-500/20 flex items-center gap-3">
+          <AlertOctagon className="w-8 h-8 text-red-500 animate-pulse" />
+          <div>
+            <h2 className="text-lg font-bold text-white tracking-tight">INTERVENTION REQUIRED</h2>
+            <p className="text-xs text-red-400 font-mono">STRUCTURAL AGENT VETO</p>
+          </div>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          <p className="text-slate-300 text-sm leading-relaxed">
+            <strong className="text-white block mb-1">Acute Pain Detected (Score {'>'} 3).</strong>
+            Continuing with impact loading (Running) presents an unacceptable risk of tissue failure. 
+            The Engine is ready, but the Chassis is compromised.
+          </p>
+          
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <div className="text-xs text-slate-500 uppercase mb-2">Recommended Substitution</div>
+            <div className="flex items-center gap-3">
+              <RefreshCw className="w-8 h-8 text-amber-500" />
+              <div>
+                <div className="text-white font-bold">60min Cycling Intervals</div>
+                <div className="text-xs text-slate-400">Maintains Metabolic Load • Zero Impact</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 bg-slate-950 flex flex-col gap-3">
+          <button 
+            onClick={onAccept}
+            className="w-full bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold py-3.5 rounded-xl transition-transform active:scale-[0.98] flex items-center justify-center gap-2"
+          >
+            <CheckCircle2 className="w-5 h-5" />
+            ACCEPT SUBSTITUTION
+          </button>
+          <button 
+            onClick={onCancel}
+            className="w-full bg-transparent hover:bg-slate-900 text-slate-500 text-xs py-3 rounded-xl"
+          >
+            Ignore Risk (Not Recommended)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 2. POST-ACTION REPORT
+const PostActionReport = ({ onClose }: { onClose: () => void }) => {
+  return (
+    <div className="fixed inset-0 z-[90] bg-slate-950 flex flex-col p-4 animate-in slide-in-from-bottom duration-300">
+      <div className="flex-1 max-w-md mx-auto w-full space-y-6 pt-10">
+        <div className="text-center">
+          <CheckCircle2 className="w-16 h-16 text-emerald-500 mx-auto mb-4" />
+          <h1 className="text-2xl font-bold text-white">Mission Complete</h1>
+          <p className="text-slate-400 text-sm">Debriefing required for Agent C analysis.</p>
+        </div>
+
+        <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-blue-400 uppercase mb-2">GI Distress (Gut Check)</label>
+            <div className="flex justify-between text-xs text-slate-500 mb-2">
+              <span>Iron Stomach</span>
+              <span>Emergency Stop</span>
+            </div>
+            <input type="range" min="1" max="10" defaultValue="1" className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-emerald-400 uppercase mb-2">Actual Carbs Ingested</label>
+            <div className="flex items-center gap-2">
+              <input type="number" placeholder="60" className="bg-slate-950 border border-slate-700 text-white p-3 rounded-lg w-full text-center font-mono text-lg" />
+              <span className="text-slate-500 text-sm">g/hr</span>
+            </div>
+          </div>
+          
+           <div>
+            <label className="block text-xs font-bold text-amber-400 uppercase mb-2">RPE (Exertion)</label>
+            <div className="grid grid-cols-5 gap-2">
+              {[6,7,8,9,10].map(n => (
+                <button key={n} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg font-mono text-sm border border-slate-700 focus:border-amber-500 focus:text-amber-500">
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <button 
+          onClick={onClose}
+          className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-4 rounded-xl shadow-lg shadow-emerald-900/20"
+        >
+          SUBMIT LOG
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// 3. DASHBOARD VIEW
+const Dashboard = ({ 
+  niggleScore, 
+  setNiggleScore, 
+  onTriggerIntervention 
+}: { 
+  niggleScore: number, 
+  setNiggleScore: (n: number) => void,
+  onTriggerIntervention: () => void
+}) => {
+  const isAdapted = niggleScore > 3;
+  const [liftStatus, setLiftStatus] = useState<'NONE' | 'MAIN' | 'HYPER' | 'STR'>('NONE');
+
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    setNiggleScore(val);
+    if (val > 3 && !isAdapted) {
+      onTriggerIntervention();
+    }
+  };
+
+  return (
+    <div className="space-y-6 pb-24">
+      {/* Header / Certainty */}
+      <div className="flex justify-between items-end">
+        <div>
+          <h2 className="text-slate-400 text-xs font-mono uppercase tracking-wider">Macro-Engine Probability</h2>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-white">82%</span>
+            <span className="text-xs text-emerald-400 flex items-center gap-1">
+              <TrendingUp className="w-3 h-3" /> +1.2%
+            </span>
+          </div>
+        </div>
+        <div className="bg-slate-800 px-2 py-1 rounded text-[10px] font-mono text-slate-300 border border-slate-700 flex items-center gap-1">
+          <Activity className="w-3 h-3 text-emerald-500" />
+          HIGH-REV: ON
+        </div>
+      </div>
+
+      {/* GO / NO-GO STATUS */}
+      <div className={`rounded-xl p-5 border-l-4 shadow-lg transition-all duration-300 ${
+        isAdapted 
+          ? 'bg-amber-500/10 border-amber-500 shadow-amber-900/20' 
+          : 'bg-emerald-500/10 border-emerald-500 shadow-emerald-900/20'
+      }`}>
+        <div className="flex items-center gap-3 mb-2">
+          {isAdapted ? <AlertTriangle className="text-amber-500" /> : <CheckCircle2 className="text-emerald-500" />}
+          <h1 className="text-xl font-bold text-white tracking-tight">
+            {isAdapted ? 'STATUS: ADAPTED' : 'STATUS: GO'}
+          </h1>
+        </div>
+        <p className="text-sm text-slate-300">
+          {isAdapted 
+            ? "Structural Agent Veto (Pain > 3). Run substituted for Non-Impact Load." 
+            : "Chassis and Engine are Green. Execute High-Rev Protocol."}
+        </p>
+      </div>
+
+      {/* CHASSIS vs ENGINE GAUGES */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+          <div className="flex items-center gap-2 mb-3">
+            <Dumbbell className={`w-4 h-4 ${isAdapted ? 'text-red-400' : 'text-slate-400'}`} />
+            <span className="text-xs font-bold text-slate-400">CHASSIS</span>
+          </div>
+          <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div 
+              className={`absolute top-0 left-0 h-full transition-all duration-500 ${isAdapted ? 'w-[40%] bg-red-500' : 'w-[85%] bg-emerald-500'}`} 
+            />
+          </div>
+          <div className="mt-3 flex justify-between text-[10px] text-slate-500 font-mono">
+            <span>LIFT: {liftStatus === 'NONE' ? '4d AGO' : 'TODAY'}</span>
+            <span>NIGGLE: {niggleScore}/10</span>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+          <div className="flex items-center gap-2 mb-3">
+            <Activity className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-bold text-slate-400">ENGINE</span>
+          </div>
+          <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div className="absolute top-0 left-0 h-full w-[92%] bg-emerald-500" />
+          </div>
+          <div className="mt-3 flex justify-between text-[10px] text-slate-500 font-mono">
+            <span>HRV: +2ms</span>
+            <span>DRIFT: 1.2%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* TODAY'S MISSION */}
+      <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+        <div className="bg-slate-800/50 p-3 border-b border-slate-800 flex justify-between items-center">
+          <span className="text-xs font-bold text-slate-300">TODAY'S MISSION</span>
+          <span className="text-[10px] font-mono text-slate-500">PHASE 2: HYBRID</span>
+        </div>
+        <div className="p-5">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h3 className="text-lg font-bold text-white mb-1">
+                {isAdapted ? '60min Cycling Intervals' : '15km Threshold Run'}
+              </h3>
+              <div className="flex gap-2 text-xs">
+                <span className="bg-slate-800 px-2 py-0.5 rounded text-slate-400">
+                  {isAdapted ? 'Non-Impact' : 'High-Rev Mode'}
+                </span>
+                {!isAdapted && (
+                  <span className="bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded flex items-center gap-1">
+                    <Droplets className="w-3 h-3" /> 90g Carbs/hr
+                  </span>
+                )}
+              </div>
+            </div>
+            {isAdapted 
+              ? <RefreshCw className="w-6 h-6 text-amber-500" /> 
+              : <Zap className="w-6 h-6 text-emerald-500" />
+            }
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Intensity Target</span>
+              <span className="font-mono text-white">
+                {isAdapted ? 'Power Z4 (280-300w)' : 'HR 175-182 bpm'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm border-b border-slate-800 pb-2">
+              <span className="text-slate-400">Structural Constraint</span>
+              <span className="font-mono text-white">
+                {isAdapted ? 'RPM > 90' : 'Cadence > 175'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ACTIVE INPUTS */}
+      <div className="bg-slate-900 p-5 rounded-xl border border-slate-800">
+        <h4 className="text-xs font-bold text-slate-400 mb-4 uppercase">Daily Chassis Audit</h4>
+        
+        <div className="mb-6">
+          <div className="flex justify-between text-sm mb-2">
+            <span className="text-white">Niggle / Pain Score</span>
+            <span className={`font-mono font-bold ${niggleScore > 3 ? 'text-red-400' : 'text-emerald-400'}`}>
+              {niggleScore}/10
+            </span>
+          </div>
+          <input 
+            type="range" 
+            min="0" 
+            max="10" 
+            value={niggleScore} 
+            onChange={handleSliderChange}
+            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          />
+          <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+            <span>Clean</span>
+            <span>Broken</span>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-300">Did you lift today?</span>
+          </div>
+          {/* Granular Strength Tonnage Input */}
+          <div className="grid grid-cols-3 gap-2">
+             <button 
+                onClick={() => setLiftStatus('MAIN')}
+                className={`text-xs py-2 rounded border ${liftStatus === 'MAIN' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-500'}`}
+             >
+               Maintenance
+             </button>
+             <button 
+                onClick={() => setLiftStatus('HYPER')}
+                className={`text-xs py-2 rounded border ${liftStatus === 'HYPER' ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-slate-800 border-slate-700 text-slate-500'}`}
+             >
+               Hypertrophy
+             </button>
+             <button 
+                onClick={() => setLiftStatus('STR')}
+                className={`text-xs py-2 rounded border ${liftStatus === 'STR' ? 'bg-violet-500/20 border-violet-500 text-violet-400 font-bold' : 'bg-slate-800 border-slate-700 text-slate-500'}`}
+             >
+               Power/Str
+             </button>
+          </div>
+          {liftStatus === 'NONE' && (
+             <p className="text-[10px] text-slate-500 text-center italic mt-1">
+               *Select tier to credit Chassis Integrity Score
+             </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 4. SESSION DETAIL VIEW (Handles Future & Past)
+const SessionDetailView = ({ session, onBack, onComplete }: { session: SessionDetail, onBack: () => void, onComplete: () => void }) => {
+  const isStrength = session.type === 'STR';
+  const isPast = !!session.agentFeedback; // Logic to detect if it's history
+  const headerColor = isStrength ? 'text-violet-400' : 'text-emerald-400';
+  const badgeColor = isStrength ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20';
+  const mainSetBorder = isStrength ? 'border-violet-500' : 'border-emerald-500';
+  const mainSetBg = isStrength ? 'bg-violet-500/5' : 'bg-emerald-500/5';
+  const mainSetText = isStrength ? 'text-violet-400' : 'text-emerald-400';
+
+  return (
+    <div className="space-y-6 pb-24 animate-in slide-in-from-right duration-300">
+      <button 
+        onClick={onBack}
+        className="flex items-center text-slate-400 hover:text-white transition-colors text-sm font-medium mb-2"
+      >
+        <ChevronLeft className="w-4 h-4 mr-1" />
+        Back to {isPast ? 'Log' : 'Tactical Map'}
+      </button>
+
+      {/* HEADER */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded uppercase font-mono tracking-wide">
+            {session.day}
+          </span>
+          {isPast ? (
+            <span className={`text-[10px] px-2 py-0.5 rounded border font-bold ${
+              session.integrity === 'VALID' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'
+            }`}>
+              DATA: {session.integrity}
+            </span>
+          ) : (
+            session.type !== 'REC' && session.type !== 'REST' && (
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-bold ${badgeColor}`}>
+                {session.type === 'STR' ? 'CHASSIS ARCHITECTURE' : 'KEY OPERATION'}
+              </span>
+            )
+          )}
+        </div>
+        <h1 className="text-2xl font-bold text-white mb-2 leading-tight">{session.title}</h1>
+        <div className="flex gap-4 text-xs text-slate-400">
+          <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {session.duration}</span>
+          <span className="flex items-center gap-1"><Dumbbell className="w-3 h-3" /> Load: {session.load}</span>
+        </div>
+      </div>
+
+      {/* MISSION OBJECTIVE */}
+      <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800">
+        <h3 className={`text-xs font-bold uppercase mb-2 flex items-center gap-2 ${headerColor}`}>
+          <Activity className="w-3 h-3" /> {isPast ? 'Mission Outcome' : 'Mission Objective'}
+        </h3>
+        <p className="text-sm text-slate-300 leading-relaxed">
+          {session.objective}
+        </p>
+      </div>
+
+      {/* IF PAST: SHOW POST-MORTEM DATA */}
+      {isPast && session.agentFeedback ? (
+        <div className="space-y-4">
+          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+            <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 flex items-center gap-2">
+              <FileBarChart className="w-3 h-3" /> Agent Post-Mortem
+            </h3>
+            <div className="space-y-3 font-mono text-xs">
+              <div className="flex gap-2">
+                <span className="text-slate-500">STRUCT:</span>
+                <span className={session.agentFeedback.structural.includes('GREEN') ? 'text-emerald-400' : 'text-red-400'}>
+                  {session.agentFeedback.structural}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-slate-500">META:</span>
+                <span className={session.agentFeedback.metabolic.includes('GREEN') ? 'text-emerald-400' : 'text-amber-400'}>
+                  {session.agentFeedback.metabolic}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+            <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 flex items-center gap-2">
+              <Target className="w-3 h-3" /> Hidden Variables Log
+            </h3>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-slate-950 p-2 rounded">
+                <div className="text-[10px] text-slate-500">NIGGLE</div>
+                <div className="text-lg font-bold text-white">{session.hiddenVariables?.niggle}/10</div>
+              </div>
+              <div className="bg-slate-950 p-2 rounded">
+                <div className="text-[10px] text-slate-500">GI RISK</div>
+                <div className="text-lg font-bold text-white">{session.hiddenVariables?.giDistress || '-'}/10</div>
+              </div>
+              <div className="bg-slate-950 p-2 rounded">
+                <div className="text-[10px] text-slate-500">LIFT</div>
+                <div className="text-lg font-bold text-white text-[10px] pt-1">{session.hiddenVariables?.strengthTier || '-'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* IF FUTURE: SHOW PROTOCOL */
+        <div className="space-y-3">
+          <h3 className="text-xs font-bold text-slate-400 uppercase ml-1">Execution Protocol</h3>
+          
+          <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+            <div className="p-3 border-b border-slate-800 bg-slate-800/30 flex justify-between items-center">
+              <span className="text-xs font-medium text-slate-300">WARMUP</span>
+              <span className="text-[10px] font-mono text-slate-500">INITIATION</span>
+            </div>
+            <div className="p-3 text-sm text-slate-300">
+              {session.protocol?.warmup}
+            </div>
+          </div>
+
+          <div className={`bg-slate-900 rounded-xl border-l-4 ${mainSetBorder} shadow-lg shadow-emerald-900/10 overflow-hidden`}>
+            <div className={`p-3 border-b border-slate-800 ${mainSetBg} flex justify-between items-center`}>
+              <span className="text-xs font-bold text-white">MAIN SET</span>
+              <span className={`text-[10px] font-mono ${mainSetText}`}>PRIME DIRECTIVE</span>
+            </div>
+            <div className="p-4 space-y-2">
+              {session.protocol?.main.map((step, i) => (
+                <div key={i} className="flex gap-3 text-sm text-white">
+                  <span className="font-mono text-slate-500">{i + 1}.</span>
+                  <span>{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+            <div className="p-3 border-b border-slate-800 bg-slate-800/30 flex justify-between items-center">
+              <span className="text-xs font-medium text-slate-300">COOL DOWN</span>
+              <span className="text-[10px] font-mono text-slate-500">FLUSH</span>
+            </div>
+            <div className="p-3 text-sm text-slate-300">
+              {session.protocol?.cooldown}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONSTRAINTS (Common to both) */}
+      {!isPast && session.constraints && (
+        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+          <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 flex items-center gap-2">
+            <AlertTriangle className="w-3 h-3" /> Constraints
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {session.constraints.map((c, i) => (
+              <span key={i} className="text-xs bg-slate-950 text-slate-300 px-3 py-1.5 rounded border border-slate-800">
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ACTION BUTTON (Only for Future) */}
+      {!isPast && (
+        <div className="sticky bottom-4 pt-4">
+          <button 
+            onClick={onComplete}
+            className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 transition-transform active:scale-[0.98]"
+          >
+            <PlayCircle className="w-5 h-5" />
+            ACCEPT MISSION / LOG COMPLETION
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// 5. PLAN VIEW
+const PlanView = ({ onTriggerPAR }: { onTriggerPAR: () => void }) => {
+  const [subView, setSubView] = useState<PlanSubView>('list');
+  const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
+
+  const handleSelectSession = (session: SessionDetail) => {
+    setSelectedSession(session);
+    setSubView('detail');
+  };
+
+  const handleBack = () => {
+    setSubView('list');
+    setSelectedSession(null);
+  };
+
+  const handleComplete = () => {
+    onTriggerPAR(); 
+  }
+
+  if (subView === 'detail' && selectedSession) {
+    return <SessionDetailView session={selectedSession} onBack={handleBack} onComplete={handleComplete} />;
+  }
+
+  return (
+    <div className="space-y-6 pb-24 animate-in fade-in duration-300">
+      <header>
+        <h1 className="text-2xl font-bold text-white mb-1">Tactical Map</h1>
+        <p className="text-sm text-slate-400">Phase 2: Metabolic Hybrid Block</p>
+      </header>
+
+      {/* Calendar Grid */}
+      <div className="bg-slate-900 rounded-xl p-1 overflow-x-auto border border-slate-800">
+        <div className="flex justify-between min-w-[300px]">
+          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, i) => (
+            <div key={i} className={`flex flex-col items-center p-3 rounded-lg min-w-[13%] ${i === 3 ? 'bg-slate-800 ring-1 ring-emerald-500' : ''}`}>
+              <span className="text-[10px] text-slate-500 mb-1">{day}</span>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold mb-1 ${
+                i < 3 ? 'bg-slate-800 text-slate-400' : i === 3 ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800/50 text-slate-600'
+              }`}>
+                {12 + i}
+              </div>
+              {i === 1 ? <RefreshCw className="w-3 h-3 text-amber-500" /> : 
+               i < 3 ? <CheckCircle2 className="w-3 h-3 text-emerald-500" /> : 
+               i === 4 ? <Hammer className="w-3 h-3 text-violet-400" /> :
+               null}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <h3 className="text-xs font-bold text-slate-400 uppercase">Upcoming Operations</h3>
+        {UPCOMING_SESSIONS.map((s) => (
+          <button 
+            key={s.id} 
+            onClick={() => handleSelectSession(s)}
+            className="w-full bg-slate-900 p-4 rounded-xl border border-slate-800 flex items-center justify-between hover:bg-slate-800 transition-colors group text-left"
+          >
+            <div>
+              <div className="text-xs text-slate-500 mb-0.5">{s.day}</div>
+              <div className="font-bold text-white text-sm">{s.title}</div>
+            </div>
+            <div className="flex items-center gap-3">
+              {s.type === 'KEY' && (
+                <div className="bg-red-500/10 text-red-400 text-[10px] px-2 py-1 rounded border border-red-500/20">
+                  KEY
+                </div>
+              )}
+              {s.type === 'STR' && (
+                <div className="bg-violet-500/10 text-violet-400 text-[10px] px-2 py-1 rounded border border-violet-500/20">
+                  STR
+                </div>
+              )}
+              <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-emerald-500 transition-colors" />
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// 6. HISTORY VIEW
+const HistoryView = () => {
+  const [subView, setSubView] = useState<'list' | 'detail'>('list');
+  const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
+
+  const handleSelectSession = (session: SessionDetail) => {
+    setSelectedSession(session);
+    setSubView('detail');
+  };
+
+  const handleBack = () => {
+    setSubView('list');
+    setSelectedSession(null);
+  };
+
+  if (subView === 'detail' && selectedSession) {
+    // Re-using SessionDetailView but with isPast logic activated by data
+    return <SessionDetailView session={selectedSession} onBack={handleBack} onComplete={() => {}} />;
+  }
+
+  return (
+    <div className="space-y-6 pb-24">
+      <header>
+        <h1 className="text-2xl font-bold text-white mb-1">Black Box</h1>
+        <p className="text-sm text-slate-400">Audit Log & Data Integrity</p>
+      </header>
+
+      <div className="space-y-3">
+        {SESSIONS_LOG.map((session) => (
+          <button 
+            key={session.id} 
+            onClick={() => handleSelectSession(session)}
+            className="w-full bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:bg-slate-800 transition-colors text-left"
+          >
+            <div className="p-4 flex justify-between items-start">
+              <div className="flex gap-3">
+                <div className={`mt-1 ${
+                  session.type === 'EXEC' ? 'text-emerald-500' : 'text-amber-500'
+                }`}>
+                  {session.type === 'EXEC' ? <CheckCircle2 className="w-5 h-5" /> : <RefreshCw className="w-5 h-5" />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs text-slate-500">{session.day}</span>
+                    {session.integrity === 'SUSPECT' && (
+                      <span className="text-[10px] bg-red-500/10 text-red-400 px-1.5 rounded border border-red-500/20">
+                        SUSPECT DATA
+                      </span>
+                    )}
+                    {session.integrity === 'VALID' && (
+                      <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 rounded">
+                        VALID
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="font-bold text-white text-sm">{session.title}</h3>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-lg font-mono font-bold text-slate-300">{session.load}</div>
+                <div className="text-[10px] text-slate-600">LOAD</div>
+              </div>
+            </div>
+            
+            {session.agentFeedback && (
+              <div className="bg-slate-950 px-4 py-2 border-t border-slate-800 flex gap-4 text-[10px] font-mono">
+                <span className={session.agentFeedback.structural.includes('RED') ? 'text-red-400' : 'text-emerald-500'}>
+                  STRUCT: {session.agentFeedback.structural.split('.')[0]}
+                </span>
+                <span className={session.agentFeedback.metabolic.includes('AMBER') ? 'text-amber-400' : 'text-emerald-500'}>
+                  META: {session.agentFeedback.metabolic.split('.')[0]}
+                </span>
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// 7. THE LAB
+const LabView = () => (
+  <div className="space-y-6 pb-24">
+    <header>
+      <h1 className="text-2xl font-bold text-white mb-1">The Lab</h1>
+      <p className="text-sm text-slate-400">Bio-Mechanical Correlations</p>
+    </header>
+
+    {/* CHART 1: INTEGRITY RATIO */}
+    <div className="bg-slate-900 p-5 rounded-xl border border-slate-800">
+      <h3 className="text-xs font-bold text-slate-400 uppercase mb-4">Integrity Ratio (Chassis vs Engine)</h3>
+      <div className="h-40 flex items-end justify-between gap-1 relative">
+        <div className="absolute top-10 left-0 w-full h-[1px] bg-emerald-500/30 border-t border-dashed border-emerald-500/50"></div>
+        <div className="absolute top-10 right-0 text-[10px] text-emerald-500/50 -mt-4">Safe Ratio</div>
+
+        {[40, 60, 55, 80, 45, 70, 90, 60, 50, 85].map((h, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-end group">
+            <div className="w-full bg-slate-800 rounded-t-sm relative transition-all hover:bg-slate-700" style={{ height: `${h}%` }}>
+              <div 
+                className="absolute w-2 h-2 bg-emerald-400 rounded-full left-1/2 -translate-x-1/2 border-2 border-slate-900"
+                style={{ bottom: `${h + (Math.random() * 20 - 10)}%` }}
+              ></div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between mt-2 text-[10px] text-slate-600 font-mono">
+        <span>12 WEEKS AGO</span>
+        <span>TODAY</span>
+      </div>
+      <div className="mt-4 flex gap-4 text-xs">
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 bg-slate-700"></div>
+          <span className="text-slate-400">Lift Tonnage</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 bg-emerald-400 rounded-full"></div>
+          <span className="text-slate-400">Run Volume</span>
+        </div>
+      </div>
+    </div>
+
+    {/* CHART 2: DECOUPLING */}
+    <div className="bg-slate-900 p-5 rounded-xl border border-slate-800">
+      <h3 className="text-xs font-bold text-slate-400 uppercase mb-4">Aerobic Decoupling (High-Rev Efficiency)</h3>
+      <div className="h-32 flex items-end gap-1">
+        {[5.2, 4.8, 4.5, 3.2, 2.8, 2.1, 1.8].map((val, i) => (
+          <div key={i} className="flex-1 bg-slate-800/50 rounded-t hover:bg-emerald-500/20 transition-colors relative group">
+            <div className="absolute bottom-0 w-full bg-emerald-500" style={{ height: `${val * 10}%` }}></div>
+            <div className="opacity-0 group-hover:opacity-100 absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded border border-slate-700">
+              {val}%
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+// 8. SETTINGS VIEW
+const SettingsView = () => {
+  const [isHighRev, setIsHighRev] = useState(false);
+  const [maxHeartRate, setMaxHeartRate] = useState(185);
+  const [thresholdHeartRate, setThresholdHeartRate] = useState(165);
+  const [injuryHistory, setInjuryHistory] = useState<string[]>([]);
+  const [liftFrequency, setLiftFrequency] = useState(2);
+
+  const injuries = ["Patellar Tendon", "Achilles Tendon", "IT Band", "Plantar Fascia", "Glute/Hamstring", "Lower Back"];
+
+  const toggleInjury = (injury: string) => {
+    setInjuryHistory(prev => prev.includes(injury) ? prev.filter(i => i !== injury) : [...prev, injury]);
+  };
+
+  const handleSave = () => {
+    alert("Phenotype Locked. Baselines Updated.");
+  };
+
+  return (
+    <div className="space-y-6 pb-24 animate-in fade-in duration-300">
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold text-white tracking-tight">Phenotype Configuration</h1>
+        <p className="text-slate-400 text-sm mt-1">
+          Define your biological truth. This data overrides standard algorithms.
+        </p>
+      </header>
+
+      <section className="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Activity className="text-emerald-400 w-5 h-5" />
+            <h2 className="font-semibold text-lg">High-Rev Mode</h2>
+          </div>
+          <button 
+            onClick={() => setIsHighRev(!isHighRev)}
+            className={`w-12 h-6 rounded-full transition-colors relative ${isHighRev ? 'bg-emerald-500' : 'bg-slate-700'}`}
+          >
+            <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-transform ${isHighRev ? 'left-7' : 'left-1'}`} />
+          </button>
+        </div>
+
+        {isHighRev ? (
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 mb-4 flex gap-3">
+            <Info className="text-emerald-400 w-10 h-10 shrink-0" />
+            <p className="text-xs text-emerald-100">
+              <strong>Phoenix Protocol Active:</strong> Standard anaerobic warnings are disabled. 
+              System will validate sustained high HR ({'>'}90% Max) as "Threshold" rather than "Error."
+            </p>
+          </div>
+        ) : (
+          <div className="bg-slate-800 rounded-lg p-3 mb-4">
+            <p className="text-xs text-slate-400">
+              Enable this if your marathon heart rate averages {'>'}175 bpm.
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">TRUE MAX HEART RATE (BPM)</label>
+            <div className="relative">
+              <input 
+                type="number" 
+                value={maxHeartRate}
+                onChange={(e) => setMaxHeartRate(parseInt(e.target.value))}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <span className="absolute right-3 top-4 text-xs text-slate-500">Override 220-Age</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">LACTATE THRESHOLD HR (BPM)</label>
+            <input 
+              type="number" 
+              value={thresholdHeartRate}
+              onChange={(e) => setThresholdHeartRate(parseInt(e.target.value))}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <ShieldAlert className="text-amber-400 w-5 h-5" />
+          <h2 className="font-semibold text-lg">Chassis Configuration</h2>
+        </div>
+
+        <div className="space-y-6">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-2">MANDATORY STRENGTH SESSIONS (PER WEEK)</label>
+            <div className="flex items-center gap-4 bg-slate-950 p-3 rounded-lg border border-slate-700">
+              <button onClick={() => setLiftFrequency(Math.max(0, liftFrequency - 1))} className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded text-xl">-</button>
+              <span className="flex-1 text-center font-mono text-lg">{liftFrequency}</span>
+              <button onClick={() => setLiftFrequency(liftFrequency + 1)} className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded text-xl">+</button>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">*Falling below this triggers an Agent A Veto on intensity.</p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-2">STRUCTURAL WEAKNESSES (INJURY HISTORY)</label>
+            <div className="flex flex-wrap gap-2">
+              {injuries.map((injury) => (
+                <button
+                  key={injury}
+                  onClick={() => toggleInjury(injury)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                    injuryHistory.includes(injury)
+                      ? 'bg-red-500/20 text-red-400 border border-red-500/50'
+                      : 'bg-slate-800 text-slate-400 border border-transparent hover:border-slate-600'
+                  }`}
+                >
+                  {injury}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <button onClick={handleSave} className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-transform active:scale-[0.98]">
+        <Save className="w-5 h-5" />
+        LOCK PHENOTYPE
+      </button>
+    </div>
+  );
+};
+
+// --- MAIN APP SHELL ---
+const App = () => {
+  const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [niggleScore, setNiggleScore] = useState(2); 
+  const [showIntervention, setShowIntervention] = useState(false);
+  const [showPAR, setShowPAR] = useState(false);
+
+  const triggerIntervention = () => setShowIntervention(true);
+  const triggerPAR = () => setShowPAR(true);
+
+  const handleAcceptSub = () => {
+    setShowIntervention(false);
+    alert("Plan Updated: Run replaced with Cycling Intervals.");
+    setNiggleScore(4); // Keep the score that triggered it
+  };
+
+  const handleCancelSub = () => {
+    setShowIntervention(false);
+    setNiggleScore(3); // Revert to safe limit if ignored (for UX demo)
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-emerald-500/30">
+      <div className="max-w-md mx-auto min-h-screen relative bg-black shadow-2xl">
+        
+        {/* MODALS */}
+        <SubstitutionModal 
+           isOpen={showIntervention} 
+           onAccept={handleAcceptSub}
+           onCancel={handleCancelSub}
+        />
+        
+        {showPAR && <PostActionReport onClose={() => setShowPAR(false)} />}
+
+        {/* Top Navigation */}
+        <nav className="p-4 flex justify-between items-center bg-slate-950/80 backdrop-blur-md sticky top-0 z-50 border-b border-slate-900">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
+              <Activity className="text-slate-950 w-5 h-5" />
+            </div>
+            <span className="font-bold tracking-tight text-lg">COACH</span>
+          </div>
+          <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 overflow-hidden">
+            <div className="w-full h-full flex items-center justify-center text-xs font-bold text-slate-500">M</div>
+          </div>
+        </nav>
+
+        {/* Main Content */}
+        <main className="p-4 animate-in fade-in duration-500">
+          {currentView === 'dashboard' && (
+            <Dashboard 
+               niggleScore={niggleScore} 
+               setNiggleScore={setNiggleScore} 
+               onTriggerIntervention={triggerIntervention}
+            />
+          )}
+          {currentView === 'plan' && <PlanView onTriggerPAR={triggerPAR} />}
+          {currentView === 'history' && <HistoryView />}
+          {currentView === 'lab' && <LabView />}
+          {currentView === 'settings' && <SettingsView />}
+        </main>
+
+        {/* Bottom Tab Navigation */}
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-950/90 backdrop-blur-xl border-t border-slate-900 max-w-md mx-auto z-50">
+          <div className="flex justify-around p-3">
+            {[
+              { id: 'dashboard', icon: LayoutDashboard, label: 'Mission' },
+              { id: 'plan', icon: Calendar, label: 'Plan' },
+              { id: 'history', icon: History, label: 'Log' },
+              { id: 'lab', icon: FlaskConical, label: 'Lab' },
+              { id: 'settings', icon: Settings, label: 'Config' },
+            ].map((tab) => (
+              <button 
+                key={tab.id}
+                onClick={() => setCurrentView(tab.id as View)}
+                className={`flex flex-col items-center gap-1 transition-colors ${currentView === tab.id ? 'text-emerald-400' : 'text-slate-600 hover:text-slate-400'}`}
+              >
+                <tab.icon className="w-5 h-5" />
+                <span className="text-[10px] font-medium">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
+export default App;

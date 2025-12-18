@@ -80,16 +80,15 @@ export async function persistAgentVotes(
       .insert(voteInserts);
 
     if (error) {
-      logger.error('Failed to persist agent votes:', error);
-      return { success: false, error: error.message || 'Database error occurred' };
+      logger.error('Failed to persist agent votes', error);
+      return { success: false, error: sanitizeErrorMessage(error) };
     }
 
     logger.info(`Persisted ${votes.length} agent votes for session ${sessionId}`);
     return { success: true };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    logger.error('Failed to persist agent votes to Supabase:', err);
-    return { success: false, error: errorMessage };
+    logger.error('Failed to persist agent votes to Supabase', err);
+    return { success: false, error: sanitizeErrorMessage(err) };
   }
 }
 

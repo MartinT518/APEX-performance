@@ -6,6 +6,7 @@ import { updateProfileConfig, toggleHighRevMode } from './phenotypeStore/logic/p
 import { isValidProfileId } from './phenotypeStore/logic/validation';
 import { createMockProfile } from './phenotypeStore/logic/mockProfile';
 import { MOCK_PROFILE_ID } from './phenotypeStore/logic/constants';
+import { logger } from '@/lib/logger';
 
 interface PhenotypeState {
   profile: IPhenotypeProfile | null;
@@ -90,7 +91,7 @@ export const usePhenotypeStore = create<PhenotypeState>()(
           set({ profile, isLoading: false });
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : 'Failed to load profile';
-          console.error('Error loading phenotype profile:', err);
+          logger.error('Error loading phenotype profile', err);
           
           // Only fallback to mock data if no user is authenticated (for development)
           const { data: session } = await (await import('@/lib/supabase')).supabase.auth.getSession();

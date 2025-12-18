@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { ChartBar, Calendar, Settings, Activity, History } from 'lucide-react';
+import { ChartBar, Calendar, Settings, Activity, History, FlaskConical } from 'lucide-react';
 import { UserMenu } from '@/components/auth/UserMenu';
 import { useAuthStore } from '@/modules/auth/authStore';
 
@@ -29,6 +29,12 @@ export function Sidebar() {
       icon: History,
       href: '/history',
       color: 'text-amber-500',
+    },
+    {
+      label: 'The Lab',
+      icon: FlaskConical,
+      href: '/lab',
+      color: 'text-purple-500',
     },
     {
       label: 'Settings',

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 
 /**
@@ -42,7 +42,7 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
  * 
  * SECURITY: Only accepts server-side keys, never falls back to client-side keys
  */
-export const createServerClient = () => {
+export function createServerClient(): SupabaseClient<Database> {
   const serverUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   // Only accept server-side keys - never fall back to client-side keys
   const serverKey = 
@@ -67,5 +67,5 @@ export const createServerClient = () => {
       autoRefreshToken: false,
     },
   });
-};
+}
 

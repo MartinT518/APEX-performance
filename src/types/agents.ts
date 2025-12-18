@@ -14,10 +14,14 @@ export interface IAgentVote {
   flaggedMetrics: IFlaggedMetric[];
 }
 
+export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power';
+
 export interface IStructuralInput {
   niggleScore: number; // 0-10
   daysSinceLastLift: number;
   acuteTonnageLoad?: number;
+  tonnageTier?: TonnageTier;
+  currentWeeklyVolume?: number; // km/week
 }
 
 export interface IMetabolicInput {

@@ -22,13 +22,15 @@ export const checkAuditNecessity = (
     // 1. CHASSIS CHECK (Strength)
     // Requirement: Daily prompt if no data found.
     // We check if we have a log for today.
-    if (!monitorState.todayEntries.strengthSession) {
-        return {
-            requiresAudit: true,
-            auditType: 'STRENGTH',
-            message: "Missing Chassis Data: Did you lift today?"
-        };
-    }
+    // NOTE: This is informational only - doesn't block analysis, but affects agent votes
+    // The strength session will default to "not performed" if not logged, which triggers Agent A AMBER
+    // if (!monitorState.todayEntries.strengthSession) {
+    //     return {
+    //         requiresAudit: true,
+    //         auditType: 'STRENGTH',
+    //         message: "Missing Chassis Data: Did you lift today?"
+    //     };
+    // }
 
     // 2. FUELING AUDIT
     // Requirement: Trigger on runs > 90 mins

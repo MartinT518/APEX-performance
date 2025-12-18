@@ -18,6 +18,8 @@ export const metadata: Metadata = {
 };
 
 import { Sidebar } from "@/components/layout/Sidebar";
+import { BottomNav } from "@/components/layout/BottomNav";
+import { TopNav } from "@/components/layout/TopNav";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ErrorBoundary } from "@/components/errors/ErrorBoundary";
 
@@ -29,14 +31,27 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-black text-white`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-slate-950 text-slate-100`}
       >
         <ErrorBoundary>
           <AuthProvider>
-            <Sidebar />
-            <main className="ml-64 min-h-screen">
-              {children}
+            {/* Desktop Sidebar - hidden on mobile */}
+            <div className="hidden md:block">
+              <Sidebar />
+            </div>
+            
+            {/* Mobile Top Nav - hidden on desktop */}
+            <TopNav />
+            
+            {/* Main Content */}
+            <main className="md:ml-64 min-h-screen pb-20 md:pb-0">
+              <div className="max-w-md mx-auto md:max-w-none md:mx-0">
+                {children}
+              </div>
             </main>
+            
+            {/* Mobile Bottom Nav - hidden on desktop */}
+            <BottomNav />
           </AuthProvider>
         </ErrorBoundary>
       </body>

@@ -1,12 +1,24 @@
 # Deployment Guide - APEX Performance
 
-This guide covers deploying the APEX Performance application to Vercel.
+This guide covers deploying the APEX Performance application to various hosting platforms. **Free options are available** - see options below.
 
 ## Prerequisites
 
-- Vercel account
-- Supabase project
+- Supabase project (free tier available)
 - Git repository (GitHub, GitLab, or Bitbucket)
+- Account for your chosen hosting platform (all listed options have free tiers)
+
+## Deployment Options
+
+### Free Options (Recommended)
+
+1. **Netlify** ⭐ (Recommended) - Excellent Next.js support, generous free tier
+2. **Cloudflare Pages** ⭐ - Unlimited requests, global CDN, great performance
+3. **Render** - Good free tier, supports full-stack apps
+
+### Paid Options
+
+4. **Vercel** - Premium Next.js hosting (paid plans required for production)
 
 ## Step 1: Supabase Setup
 
@@ -20,9 +32,90 @@ This guide covers deploying the APEX Performance application to Vercel.
    - Publishable Key: Found in Settings > API (new format: `publishable_default_key`)
    - Secret Key: Found in Settings > API (new format: `secret_default_key`)
 
-## Step 2: Vercel Deployment
+## Step 2: Choose Your Hosting Platform
 
-### Option A: Deploy via Vercel Dashboard
+### Option 1: Netlify (Recommended - Free) ⭐
+
+**Free Tier**: 100 GB bandwidth, 300 build minutes/month, unlimited sites
+
+#### Deploy via Netlify Dashboard
+
+1. Go to https://netlify.com and sign up (free)
+2. Click "Add new site" > "Import an existing project"
+3. Connect your Git repository
+4. Configure build settings:
+   - **Build command**: `npm run build`
+   - **Publish directory**: `.next`
+   - **Framework preset**: Next.js (auto-detected)
+5. Add environment variables (see Step 3)
+6. Click "Deploy site"
+
+#### Deploy via Netlify CLI
+
+```bash
+# Install Netlify CLI
+npm install -g netlify-cli
+
+# Login
+netlify login
+
+# Deploy
+netlify deploy --prod
+```
+
+**Note**: Netlify requires a `netlify.toml` file for Next.js. Create one in your project root:
+
+```toml
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+```
+
+### Option 2: Cloudflare Pages (Free) ⭐
+
+**Free Tier**: Unlimited requests, unlimited bandwidth, global CDN
+
+#### Deploy via Cloudflare Dashboard
+
+1. Go to https://pages.cloudflare.com and sign up (free)
+2. Click "Create a project" > "Connect to Git"
+3. Select your repository
+4. Configure build settings:
+   - **Framework preset**: Next.js
+   - **Build command**: `npm run build`
+   - **Build output directory**: `.next`
+5. Add environment variables (see Step 3)
+6. Click "Save and Deploy"
+
+**Note**: Cloudflare Pages automatically detects Next.js and configures accordingly.
+
+### Option 3: Render (Free)
+
+**Free Tier**: 750 hours/month, automatic SSL, custom domains
+
+#### Deploy via Render Dashboard
+
+1. Go to https://render.com and sign up (free)
+2. Click "New +" > "Web Service"
+3. Connect your Git repository
+4. Configure:
+   - **Name**: Your app name
+   - **Environment**: Node
+   - **Build Command**: `npm install && npm run build`
+   - **Start Command**: `npm start`
+5. Add environment variables (see Step 3)
+6. Click "Create Web Service"
+
+**Note**: Render free tier spins down after 15 minutes of inactivity. First request may be slow.
+
+### Option 4: Vercel (Paid)
+
+**Note**: Vercel's free tier is limited. Paid plans start at $20/month for production use.
+
+#### Deploy via Vercel Dashboard
 
 1. Go to https://vercel.com and sign in
 2. Click "New Project"
@@ -35,7 +128,7 @@ This guide covers deploying the APEX Performance application to Vercel.
 5. Add environment variables (see Step 3)
 6. Click "Deploy"
 
-### Option B: Deploy via CLI
+#### Deploy via CLI
 
 ```bash
 # Install Vercel CLI
@@ -53,7 +146,19 @@ vercel --prod
 
 ## Step 3: Environment Variables
 
-Add these environment variables in Vercel dashboard (Settings > Environment Variables):
+Add these environment variables in your hosting platform's dashboard:
+
+### Netlify
+- Go to Site settings > Environment variables
+
+### Cloudflare Pages
+- Go to Pages > Your project > Settings > Environment variables
+
+### Render
+- Go to Environment tab in your service
+
+### Vercel
+- Go to Project settings > Environment variables
 
 ### Required Variables
 
@@ -74,7 +179,8 @@ GARMIN_PASSWORD=your-password
 **Important**: 
 - Variables prefixed with `NEXT_PUBLIC_` are exposed to the browser
 - Never commit secrets to version control
-- Use Vercel's environment variable management for different environments (Production, Preview, Development)
+- All platforms support environment-specific variables (Production, Preview, Development)
+- Free tiers typically support environment variables
 
 ## Step 4: Database Migration
 
@@ -110,13 +216,23 @@ After deployment, verify the database schema:
 
 ## Step 6: Monitoring and Logging
 
-### Vercel Analytics
+### Platform-Specific Analytics
 
-1. Enable Vercel Analytics in project settings
-2. Monitor:
-   - Page views
-   - Performance metrics
-   - Error rates
+**Netlify**:
+- Built-in analytics available (paid add-on)
+- Access logs in Site settings > Analytics
+
+**Cloudflare Pages**:
+- Built-in analytics dashboard
+- Access via Pages > Your project > Analytics
+
+**Render**:
+- Built-in logs and metrics
+- Access via your service > Logs tab
+
+**Vercel**:
+- Enable Vercel Analytics in project settings
+- Monitor page views, performance metrics, error rates
 
 ### Supabase Logs
 
@@ -128,7 +244,10 @@ After deployment, verify the database schema:
 
 ### Application Logs
 
-- Check Vercel function logs for server-side errors
+- **Netlify**: Check function logs in Site settings > Functions
+- **Cloudflare Pages**: Check build logs and runtime logs in dashboard
+- **Render**: Check logs in your service > Logs tab
+- **Vercel**: Check function logs in deployment details
 - Use browser console for client-side errors
 - Logger utility (`src/lib/logger.ts`) respects environment log levels
 
@@ -136,6 +255,22 @@ After deployment, verify the database schema:
 
 ### Quick Rollback
 
+**Netlify**:
+1. Go to Site overview > Deploys
+2. Find the previous working deployment
+3. Click "..." menu > "Publish deploy"
+
+**Cloudflare Pages**:
+1. Go to Pages > Your project > Deployments
+2. Find the previous working deployment
+3. Click "..." menu > "Retry deployment" or "Rollback"
+
+**Render**:
+1. Go to your service > Deploys
+2. Find the previous working deployment
+3. Click "..." menu > "Rollback to this deploy"
+
+**Vercel**:
 1. Go to Vercel Dashboard > Deployments
 2. Find the previous working deployment
 3. Click "..." menu > "Promote to Production"
@@ -164,7 +299,11 @@ Configuration is managed in `src/lib/config.ts`.
 
 - Check Node.js version (should be 18+)
 - Verify all environment variables are set
-- Check build logs in Vercel dashboard
+- Check build logs in your platform's dashboard:
+  - **Netlify**: Site overview > Deploys > Click failed deploy
+  - **Cloudflare Pages**: Pages > Your project > Deployments > Click failed deploy
+  - **Render**: Your service > Deploys > Click failed deploy
+  - **Vercel**: Project > Deployments > Click failed deploy
 
 ### Database Connection Issues
 
@@ -202,16 +341,39 @@ Use Supabase dashboard or backup scripts:
 ## Support
 
 For issues:
-1. Check Vercel deployment logs
+1. Check your platform's deployment logs (see Step 6)
 2. Check Supabase logs
 3. Review application error logs
 4. Check browser console for client errors
 
+### Platform Support
+
+- **Netlify**: https://docs.netlify.com (excellent documentation)
+- **Cloudflare Pages**: https://developers.cloudflare.com/pages (comprehensive docs)
+- **Render**: https://render.com/docs (good documentation)
+- **Vercel**: https://vercel.com/docs (excellent documentation)
+
 ## Security Notes
 
 - Never commit `.env.local` or secrets
-- Use Vercel's environment variable encryption
+- All platforms provide encrypted environment variable storage
 - Regularly rotate API keys
 - Monitor for unauthorized access
 - Keep dependencies updated
+- Use platform-specific security features:
+  - **Netlify**: Built-in DDoS protection, secure headers
+  - **Cloudflare Pages**: Automatic DDoS protection, WAF (Web Application Firewall)
+  - **Render**: Built-in security features
+  - **Vercel**: Enterprise-grade security features
+
+## Cost Comparison
+
+| Platform | Free Tier | Paid Plans Start At |
+|----------|-----------|---------------------|
+| **Netlify** | 100 GB bandwidth, 300 build min/month | $19/month (Pro) |
+| **Cloudflare Pages** | Unlimited requests, unlimited bandwidth | Free (paid for advanced features) |
+| **Render** | 750 hours/month, spins down after inactivity | $7/month (Starter) |
+| **Vercel** | Limited free tier | $20/month (Pro) |
+
+**Recommendation**: Start with **Netlify** or **Cloudflare Pages** for the best free experience with Next.js applications.
 

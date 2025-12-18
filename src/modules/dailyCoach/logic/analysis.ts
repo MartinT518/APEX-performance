@@ -1,11 +1,13 @@
 import { updateBaselines } from '../../analyze/baselineEngine';
 import { runMonteCarloSimulation } from '../../analyze/blueprintEngine';
+import { useAnalyzeStore } from '../../analyze/analyzeStore';
 import { logger } from '@/lib/logger';
 
 export interface AnalysisResult {
   baselines: {
     hrvBaseline: number;
     tonnageBaseline: number;
+    gutTrainingIndex: number;
   };
   simulation: {
     successProbability: number;
@@ -35,6 +37,10 @@ export async function runAnalysis(
   
   logger.info(`Baselines Updated: HRV=${baselines.hrvBaseline.toFixed(1)}, Tonnage=${baselines.tonnageBaseline.toFixed(1)}`);
 
+  // Get gut training index from analyzeStore
+  const analyzeStore = useAnalyzeStore.getState();
+  const gutTrainingIndex = analyzeStore.baselines.gutTrainingIndex || 0;
+
   // Run Monte Carlo
   const simulation = runMonteCarloSimulation({
     currentLoad: 500, // arbitrary unit
@@ -44,6 +50,12 @@ export async function runAnalysis(
   });
   
   logger.info(`Blueprint Confidence: ${simulation.confidenceScore} (${simulation.successProbability.toFixed(1)}%)`);
-  return { baselines, simulation };
+  return { 
+    baselines: {
+      ...baselines,
+      gutTrainingIndex
+    }, 
+    simulation 
+  };
 }
 

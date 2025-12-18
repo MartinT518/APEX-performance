@@ -1,5 +1,6 @@
 import { ISessionStream, ISessionDataPoint } from '@/types/session';
 import type { IGarminActivityDetails, IGarminMetricDescriptor, IGarminMetricEntry } from '@/types/garmin';
+import { logger } from '@/lib/logger';
 
 /**
  * Adapter to transform Garmin Activity Details into APEX Session Stream.
@@ -26,7 +27,7 @@ export const adaptGarminToSessionStream = (activityDetails: unknown): ISessionSt
 
   // Safe checks for data existence
   if (!details?.activityDetailMetrics) {
-    console.warn('No metrics found in activity details');
+    logger.warn('No metrics found in activity details');
     return stream;
   }
 

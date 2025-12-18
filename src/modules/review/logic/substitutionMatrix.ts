@@ -38,7 +38,14 @@ export const synthesizeCoachDecision = (
         // RED Structural = SUBSTITUTE (Impact -> Non-Impact)
         if (originalWorkout.type === 'RUN' || originalWorkout.type === 'STRENGTH') {
           finalWorkout.type = 'BIKE';
-          reasoning = "Structural Risk (Pain) detected. Switching to Non-Impact.";
+          // Match HR intensity from original workout
+          const targetHR = getTargetHRForZone(originalWorkout.primaryZone);
+          finalWorkout.constraints = {
+            hrTarget: { min: targetHR - 10, max: targetHR + 5 }
+          };
+          finalWorkout.explanation = `Structural Agent reported pain. We are preserving the Metabolic Engine while deloading the Chassis. Do NOT run.`;
+          finalWorkout.isAdapted = true;
+          reasoning = `Engine is ready, but Chassis reported pain. Run substituted for Bike.`;
           modifications.push("Switched to BIKE");
         } else {
           // Already non-impact -> Reduce Intensity
@@ -124,3 +131,15 @@ const modifyIntensity = (w: IWorkout, zone: IntensityZone): IWorkout => ({
     mainSet: `Modified to ${zone}`
   }
 });
+
+// Helper to get target HR for a zone (simplified - should use phenotype config)
+const getTargetHRForZone = (zone: IntensityZone): number => {
+  const zoneHR: Record<IntensityZone, number> = {
+    'Z1_RECOVERY': 140,
+    'Z2_ENDURANCE': 150,
+    'Z3_TEMPO': 165,
+    'Z4_THRESHOLD': 175,
+    'Z5_VO2MAX': 185
+  };
+  return zoneHR[zone] || 150;
+};

@@ -6,6 +6,7 @@ import { StrengthTierDialog } from './StrengthTierDialog';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useState, useEffect } from 'react';
 import { useToast, ToastContainer } from '@/components/ui/toast';
+import { logger } from '@/lib/logger';
 
 const TIER_LABELS: Record<TonnageTier, { label: string; description: string }> = {
   maintenance: { label: 'Mobility / Low', description: 'Light maintenance work' },
@@ -40,7 +41,9 @@ export function DailyCheckIn() {
         setShowTierDialog(true);
       }
     } catch (err) {
-      toast.error('Save Failed', err instanceof Error ? err.message : 'Failed to save strength session');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save strength session';
+      logger.error('Strength session toggle failed', err);
+      toast.error('Save Failed', errorMsg);
     }
   };
 
@@ -49,8 +52,12 @@ export function DailyCheckIn() {
       await logStrengthSession(true, tier);
       toast.success('Saved', 'Strength session logged successfully');
       setShowTierDialog(false);
+      // Force a small delay to ensure state updates
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch (err) {
-      toast.error('Save Failed', err instanceof Error ? err.message : 'Failed to save strength session');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to save strength session';
+      logger.error('Strength session tier select failed', err);
+      toast.error('Save Failed', errorMsg);
     }
   };
 

@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import type { TonnageTier } from '../monitorStore';
 import { dbToTonnageTier } from './tierMapper';
 import type { Database } from '@/types/database';
+import { logger } from '@/lib/logger';
 
 type DailyMonitoringRow = Database['public']['Tables']['daily_monitoring']['Row'];
 
@@ -35,7 +36,7 @@ export async function loadTodayMonitoringFromSupabase(
     }
 
     if (!targetUserId) {
-      console.warn('No user ID available. Skipping daily monitoring load.');
+      logger.warn('No user ID available. Skipping daily monitoring load.');
       return null;
     }
 
@@ -69,7 +70,7 @@ export async function loadTodayMonitoringFromSupabase(
       lastAuditTime: data.updated_at ? new Date(data.updated_at).getTime() : null,
     };
   } catch (err) {
-    console.warn('Failed to load daily monitoring from Supabase:', err);
+    logger.warn('Failed to load daily monitoring from Supabase', err);
     return null;
   }
 }

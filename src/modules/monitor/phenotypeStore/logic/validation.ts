@@ -18,7 +18,7 @@ export async function validateProfileId(
 ): Promise<void> {
   if (!isValidProfileId(profileId)) {
     if (reloadFn) {
-      console.warn('Profile has mock ID, reloading from Supabase before update...');
+      logger.warn('Profile has mock ID, reloading from Supabase before update');
       await reloadFn();
       // Note: Caller should re-validate after reload
     } else {

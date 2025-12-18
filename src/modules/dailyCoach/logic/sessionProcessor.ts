@@ -15,6 +15,8 @@ export interface SessionProcessingResult {
     activityId?: string;
     activityName?: string;
     timestamp?: string;
+    // Allow additional metadata fields for Garmin sync
+    [key: string]: unknown;
   };
 }
 
@@ -28,11 +30,11 @@ export async function processSessionData(
   logger.info(">> Step 3: Raw Data Processing");
   
   let sessionPoints = points;
-  let dataSource: 'GARMIN' | 'SIMULATION' | 'NONE' = 'SIMULATION';
-  let activityId: string | undefined = 'mock_activity_001';
-  let activityName: string | undefined = 'Simulated Session';
+  let dataSource: 'GARMIN' | 'SIMULATION' | 'NONE' = 'NONE';
+  let activityId: string | undefined;
+  let activityName: string | undefined;
 
-  // If no points provided, try fetching from Garmin
+  // If no points provided, try fetching from Garmin (prioritize live data)
   if (sessionPoints.length === 0 && garminClient) {
     logger.info("Fetching latest session from Garmin...");
     try {
@@ -46,12 +48,20 @@ export async function processSessionData(
           dataSource = 'GARMIN';
           activityId = `${activity.activityId}`;
           activityName = activity.activityName;
-          logger.info(`✅ Ingested ${sessionPoints.length} points from Garmin.`);
+          logger.info(`✅ Ingested ${sessionPoints.length} points from Garmin: ${activityName}`);
+        } else {
+          logger.warn("⚠️ Garmin activity details not available");
         }
+      } else {
+        logger.info("ℹ️ No recent Garmin activities found");
       }
     } catch (e) {
       logger.error("Garmin Fetch Error", e);
     }
+  } else if (sessionPoints.length > 0) {
+    // Points were provided directly (could be from simulation or manual input)
+    dataSource = 'SIMULATION';
+    activityName = 'Provided Session';
   }
 
   if (sessionPoints.length === 0) {
@@ -88,17 +98,20 @@ export async function processSessionData(
   if (cadenceLockDetected) {
     logger.warn(`Cadence Lock detected: ${cadenceLockDiagnostics.flaggedIndices.length} points flagged`);
   }
+
+  // Add cadence lock info to metadata if detected
+  const metadata: SessionProcessingResult['metadata'] = {
+    dataSource, 
+    activityId, 
+    activityName, 
+    timestamp: new Date().toISOString()
+  };
   
   return { 
     points: sessionPoints,
     diagnostics: integrity,
     cadenceLockDetected,
-    metadata: { 
-      dataSource, 
-      activityId, 
-      activityName, 
-      timestamp: new Date().toISOString() 
-    } 
+    metadata
   };
 }
 

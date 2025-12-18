@@ -20,7 +20,8 @@ function getEnvironment(): Environment {
     // Server-side
     const env = process.env.NODE_ENV;
     if (env === 'production') return 'production';
-    if (env === 'staging') return 'staging';
+    // Check for custom staging environment variable
+    if (process.env.ENVIRONMENT === 'staging') return 'staging';
     return 'development';
   }
   

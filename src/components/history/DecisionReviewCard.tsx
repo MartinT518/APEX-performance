@@ -1,5 +1,9 @@
 "use client";
 
+import { SessionStatusBadges } from "./SessionStatusBadges";
+import { SessionDetailView } from "./SessionDetailView";
+import { Activity, Dumbbell, UtensilsCrossed } from "lucide-react";
+
 interface SessionLog {
   id: string;
   session_date: string;
@@ -18,28 +22,22 @@ interface SessionLog {
   }>;
 }
 
-interface DecisionReviewCardProps {
-  session: SessionLog;
+interface DailyMonitoring {
+  niggle_score: number | null;
+  strength_session: boolean;
+  strength_tier: 'Mobility' | 'Hypertrophy' | 'Strength' | 'Power' | null;
+  tonnage: number | null;
+  fueling_logged: boolean;
+  fueling_carbs_per_hour: number | null;
 }
 
-export function DecisionReviewCard({ session }: DecisionReviewCardProps) {
-  const getVoteColor = (vote: 'GREEN' | 'YELLOW' | 'RED') => {
-    switch (vote) {
-      case 'GREEN': return 'text-green-500 bg-green-500/10';
-      case 'YELLOW': return 'text-yellow-500 bg-yellow-500/10';
-      case 'RED': return 'text-red-500 bg-red-500/10';
-    }
-  };
+interface DecisionReviewCardProps {
+  session: SessionLog;
+  dailyMonitoring?: DailyMonitoring | null;
+  certaintyDelta?: number;
+}
 
-  const getAgentLabel = (type: string) => {
-    switch (type) {
-      case 'STRUCTURAL': return 'Structural';
-      case 'METABOLIC': return 'Metabolic';
-      case 'FUELING': return 'Fueling';
-      default: return type;
-    }
-  };
-
+export function DecisionReviewCard({ session, dailyMonitoring, certaintyDelta }: DecisionReviewCardProps) {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -51,53 +49,51 @@ export function DecisionReviewCard({ session }: DecisionReviewCardProps) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
       <div className="flex justify-between items-start mb-4">
-        <div>
+        <div className="flex-1">
           <h3 className="text-xl font-semibold text-zinc-100 mb-1">
             {formatDate(session.session_date)}
           </h3>
-          <div className="flex gap-4 text-sm text-zinc-400">
+          <div className="flex gap-4 text-sm text-zinc-400 mb-3">
             <span>{session.sport_type}</span>
             <span>{session.duration_minutes} min</span>
             <span className="capitalize">{session.source.replace('_', ' ')}</span>
           </div>
+          
+          {/* Status Badges */}
+          <SessionStatusBadges 
+            sportType={session.sport_type}
+            metadata={session.metadata}
+          />
         </div>
-        <div className="text-sm text-zinc-500">
-          {session.votes.length} agent vote{session.votes.length !== 1 ? 's' : ''}
+
+        {/* Subjective Inputs Indicators */}
+        <div className="flex gap-2 ml-4">
+          {dailyMonitoring && dailyMonitoring.niggle_score !== null && (
+            <div className="flex items-center gap-1 text-xs text-zinc-400" title={`Niggle: ${dailyMonitoring.niggle_score}/10`}>
+              <Activity className="h-4 w-4" />
+            </div>
+          )}
+          {dailyMonitoring?.strength_session && (
+            <div className="flex items-center gap-1 text-xs text-zinc-400" title="Strength logged">
+              <Dumbbell className="h-4 w-4" />
+            </div>
+          )}
+          {dailyMonitoring?.fueling_logged && (
+            <div className="flex items-center gap-1 text-xs text-zinc-400" title="Fueling logged">
+              <UtensilsCrossed className="h-4 w-4" />
+            </div>
+          )}
         </div>
       </div>
 
-      {session.votes.length > 0 ? (
-        <div className="space-y-3 mt-4">
-          <h4 className="text-sm font-semibold text-zinc-300 uppercase tracking-wide">
-            Agent Votes
-          </h4>
-          {session.votes.map((vote) => (
-            <div
-              key={vote.id}
-              className={`p-3 rounded border ${getVoteColor(vote.vote)} border-current/20`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-medium">{getAgentLabel(vote.agent_type)} Agent</span>
-                <span className="text-xs font-semibold">{vote.vote}</span>
-              </div>
-              <p className="text-sm text-zinc-300 mt-1">{vote.reasoning}</p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-zinc-500 text-sm mt-4">No agent votes recorded for this session.</p>
-      )}
-
-      {session.metadata && Object.keys(session.metadata).length > 0 && (
-        <details className="mt-4">
-          <summary className="text-sm text-zinc-400 cursor-pointer hover:text-zinc-300">
-            View Metadata
-          </summary>
-          <pre className="mt-2 p-3 bg-zinc-950 rounded text-xs text-zinc-400 overflow-auto">
-            {JSON.stringify(session.metadata, null, 2)}
-          </pre>
-        </details>
-      )}
+      {/* Session Detail View */}
+      <SessionDetailView
+        sessionDate={session.session_date}
+        metadata={session.metadata}
+        votes={session.votes}
+        dailyMonitoring={dailyMonitoring || null}
+        certaintyDelta={certaintyDelta}
+      />
     </div>
   );
 }

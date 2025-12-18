@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { calculateEWMA, calculateRollingAverage } from '../../baselineEngine';
 import type { BaselineHistory, Baselines } from './baselineCalculator';
+import { logger } from '@/lib/logger';
 
 /**
  * Loads baseline metrics from Supabase and reconstructs history/baselines
@@ -17,17 +18,27 @@ export async function loadBaselinesFromSupabase(
     }
 
     if (!targetUserId) {
-      console.warn('No user ID available. Skipping baseline load.');
+      logger.warn('No user ID available. Skipping baseline load.');
       return null;
     }
 
     // Load last 28 days of metrics
+    type BaselineMetricsRow = {
+      id: string;
+      user_id: string;
+      date: string;
+      hrv: number | null;
+      tonnage: number | null;
+      fueling_carbs_per_hour: number | null;
+      created_at: string;
+    };
+    
     const { data, error } = await supabase
       .from('baseline_metrics')
       .select('*')
       .eq('user_id', targetUserId)
       .order('date', { ascending: false })
-      .limit(28);
+      .limit(28) as { data: BaselineMetricsRow[] | null; error: unknown };
 
     if (error) throw error;
 
@@ -79,7 +90,7 @@ export async function loadBaselinesFromSupabase(
       },
     };
   } catch (err) {
-    console.warn('Failed to load baselines from Supabase:', err);
+    logger.warn('Failed to load baselines from Supabase', err);
     return null;
   }
 }

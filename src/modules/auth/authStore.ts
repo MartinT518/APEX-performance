@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
+import { logger } from '@/lib/logger';
 
 interface AuthState {
   user: User | null;
@@ -110,7 +111,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         session: session ?? null,
       });
     } catch (err) {
-      console.error('Error getting current user:', err);
+      logger.error('Error getting current user', err);
     }
   },
 

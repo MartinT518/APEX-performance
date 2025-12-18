@@ -1,182 +1,429 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { createClient } from '@/lib/supabase';
-import { DecisionReviewCard } from '@/components/history/DecisionReviewCard';
-import { logger } from '@/lib/logger';
 import { ErrorBoundary } from '@/components/errors/ErrorBoundary';
+import { SessionDetailView } from '@/components/shared/SessionDetailView';
+import { loadSessionsWithVotes } from './logic/sessionLoader';
+import { sessionWithVotesToPrototype } from '@/types/prototype';
+import { supabase } from '@/lib/supabase';
+import { CheckCircle2, RefreshCw, Download, Clock } from 'lucide-react';
+import { logger } from '@/lib/logger';
+import type { PrototypeSessionDetail } from '@/types/prototype';
+import { syncGarminSessions } from '../actions';
 
-interface SessionLog {
-  id: string;
-  session_date: string;
-  sport_type: 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER';
-  duration_minutes: number;
-  source: 'garmin_health' | 'manual_upload' | 'test_mock';
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-}
-
-interface AgentVote {
-  id: string;
-  session_id: string;
-  agent_type: 'STRUCTURAL' | 'METABOLIC' | 'FUELING';
-  vote: 'GREEN' | 'YELLOW' | 'RED';
-  reasoning: string;
-  created_at: string;
-}
-
-interface SessionWithVotes extends SessionLog {
-  votes: AgentVote[];
-}
+type HistorySubView = 'list' | 'detail';
 
 function HistoryContent() {
-  const [sessions, setSessions] = useState<SessionWithVotes[]>([]);
+  const [subView, setSubView] = useState<HistorySubView>('list');
+  const [selectedSession, setSelectedSession] = useState<PrototypeSessionDetail | null>(null);
+  const [sessions, setSessions] = useState<PrototypeSessionDetail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [filterSport, setFilterSport] = useState<'ALL' | 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER'>('ALL');
-  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
-    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string>('');
+  const [syncCooldown, setSyncCooldown] = useState<number | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'up_to_date' | 'cooldown'>('idle');
 
   useEffect(() => {
     loadSessions();
-  }, [filterSport, dateRange]);
-
-  async function loadSessions() {
-    setIsLoading(true);
-    setError(null);
+    checkSyncStatus();
     
+    // Auto-sync on app foregrounding (check every 30 seconds)
+    const interval = setInterval(() => {
+      checkSyncStatus();
+    }, 30000);
+    
+    // Also check when window gains focus
+    const handleFocus = () => {
+      checkSyncStatus();
+    };
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
+  const checkSyncStatus = async () => {
     try {
-      const supabase = createClient();
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
+      
+      if (!userId) return;
+      
+      // Check last sync time from database
+      const { data: lastSession } = await supabase
+        .from('session_logs')
+        .select('created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      const lastSessionTyped = lastSession as { created_at: string } | null;
+      if (lastSessionTyped?.created_at) {
+        const lastSync = new Date(lastSessionTyped.created_at);
+        const now = new Date();
+        const minutesSinceSync = (now.getTime() - lastSync.getTime()) / (1000 * 60);
+        
+        if (minutesSinceSync < 5) {
+          setSyncStatus('up_to_date');
+          setLastSyncTime(lastSync);
+        } else {
+          setSyncStatus('idle');
+        }
+      } else {
+        setSyncStatus('idle');
+      }
+    } catch (err) {
+      logger.warn('Failed to check sync status', err);
+    }
+  };
+
+  const loadSessions = async () => {
+    setIsLoading(true);
+    try {
       const { data: session } = await supabase.auth.getSession();
       const userId = session?.session?.user?.id;
       
       if (!userId) {
-        setError('Not authenticated');
         setIsLoading(false);
         return;
       }
 
-      // Build query
-      let query = supabase
-        .from('session_logs')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('session_date', dateRange.start)
-        .lte('session_date', dateRange.end)
-        .order('session_date', { ascending: false })
-        .limit(50);
+      // Load last 30 days
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
 
-      if (filterSport !== 'ALL') {
-        query = query.eq('sport_type', filterSport);
-      }
-
-      const { data: sessionLogs, error: logsError } = await query;
-
-      if (logsError) throw logsError;
-
-      // Fetch votes for each session
-      const sessionsWithVotes: SessionWithVotes[] = await Promise.all(
-        (sessionLogs || []).map(async (log) => {
-          const { data: votes } = await supabase
-            .from('agent_votes')
-            .select('*')
-            .eq('session_id', log.id)
-            .order('created_at', { ascending: true });
-
-          return {
-            ...log,
-            votes: votes || []
-          };
-        })
+      const sessionsWithVotes = await loadSessionsWithVotes(
+        userId,
+        {
+          start: startDate.toISOString().split('T')[0],
+          end: endDate.toISOString().split('T')[0]
+        },
+        'ALL'
       );
 
-      setSessions(sessionsWithVotes);
+      // Debug: Log raw session data
+      logger.info(`Loaded ${sessionsWithVotes.length} sessions from database`);
+      if (sessionsWithVotes.length > 0) {
+        logger.info('Sample session metadata:', JSON.stringify(sessionsWithVotes[0].metadata, null, 2));
+      }
+
+      // Convert to prototype format
+      const prototypeSessions = sessionsWithVotes.map(s => 
+        sessionWithVotesToPrototype(s, s.dailyMonitoring || null)
+      );
+
+      // Debug: Log converted sessions
+      if (prototypeSessions.length > 0) {
+        logger.info('Sample converted session:', JSON.stringify(prototypeSessions[0], null, 2));
+      }
+
+      setSessions(prototypeSessions);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load sessions';
-      logger.error('Failed to load session history', err);
-      setError(errorMessage);
+      logger.error('Failed to load history', err);
+      // Show error to user
+      setSessions([]);
     } finally {
       setIsLoading(false);
     }
-  }
+  };
+
+  const handleSelectSession = (session: PrototypeSessionDetail) => {
+    setSelectedSession(session);
+    setSubView('detail');
+  };
+
+  const handleBack = () => {
+    setSubView('list');
+    setSelectedSession(null);
+  };
+
+  const handleClearAllSessions = async () => {
+    if (!confirm('Are you sure you want to delete all synced sessions? This cannot be undone.')) {
+      return;
+    }
+
+    setIsSyncing(true);
+    setSyncMessage('');
+    
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
+      
+      if (!userId) {
+        setSyncMessage('Please log in to clear sessions.');
+        setIsSyncing(false);
+        return;
+      }
+
+      // Delete all sessions for this user
+      const { error } = await supabase
+        .from('session_logs')
+        .delete()
+        .eq('user_id', userId)
+        .eq('source', 'garmin_health');
+
+      if (error) {
+        setSyncMessage('Failed to clear sessions: ' + error.message);
+      } else {
+        setSyncMessage('All sessions cleared. You can now re-sync.');
+        setSessions([]);
+        // Auto-sync after clearing
+        setTimeout(() => {
+          handleSyncGarmin(false);
+        }, 1000);
+      }
+    } catch (err) {
+      logger.error('Failed to clear sessions', err);
+      setSyncMessage('Failed to clear sessions.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncGarmin = async (forceUpdate: boolean = false) => {
+    setIsSyncing(true);
+    setSyncMessage('');
+    
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
+      
+      if (!userId) {
+        setSyncMessage('Please log in to sync Garmin data.');
+        setIsSyncing(false);
+        return;
+      }
+
+      // Default to last 30 days
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
+
+      const result = await syncGarminSessions(
+        startDate.toISOString().split('T')[0],
+        endDate.toISOString().split('T')[0],
+        userId,
+        forceUpdate // Force update if requested
+      );
+
+      if (result.inCooldown && result.minutesRemaining) {
+        setSyncCooldown(result.minutesRemaining);
+        setSyncStatus('cooldown');
+        setSyncMessage(`Sync in cooldown. Please wait ${result.minutesRemaining} more minute(s).`);
+      } else if (result.success) {
+        setSyncMessage(`Successfully synced ${result.synced || 0} session(s).`);
+        setSyncStatus('up_to_date');
+        setLastSyncTime(new Date());
+        // Reload sessions after sync
+        await loadSessions();
+      } else {
+        setSyncStatus('idle');
+        setSyncMessage(result.message || 'Sync failed. Please try again.');
+      }
+    } catch (err) {
+      logger.error('Failed to sync Garmin', err);
+      setSyncMessage('Sync failed. Please check your Garmin credentials and try again.');
+    } finally {
+      setIsSyncing(false);
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        setSyncMessage('');
+        setSyncCooldown(null);
+      }, 5000);
+    }
+  };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-black text-white p-8 font-sans ml-64">
+      <div className="space-y-6 pb-24 p-4">
         <div className="flex items-center justify-center h-64">
-          <p className="text-zinc-400">Loading session history...</p>
+          <p className="text-slate-400">Loading session history...</p>
         </div>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="min-h-screen bg-black text-white p-8 font-sans ml-64">
-        <div className="flex items-center justify-center h-64">
-          <p className="text-red-400">Error: {error}</p>
-        </div>
-      </div>
-    );
+  if (subView === 'detail' && selectedSession) {
+    return <SessionDetailView session={selectedSession} onBack={handleBack} />;
   }
 
   return (
-    <div className="min-h-screen bg-black text-white p-8 font-sans ml-64">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 text-zinc-100">Session History</h1>
-
-        {/* Filters */}
-        <div className="mb-6 flex gap-4 items-center">
-          <div>
-            <label className="text-sm text-zinc-400 mr-2">Sport Type:</label>
-            <select
-              value={filterSport}
-              onChange={(e) => setFilterSport(e.target.value as any)}
-              className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white"
-            >
-              <option value="ALL">All</option>
-              <option value="RUNNING">Running</option>
-              <option value="CYCLING">Cycling</option>
-              <option value="STRENGTH">Strength</option>
-              <option value="OTHER">Other</option>
-            </select>
-          </div>
-          
-          <div>
-            <label className="text-sm text-zinc-400 mr-2">Start Date:</label>
-            <input
-              type="date"
-              value={dateRange.start}
-              onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-              className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="text-sm text-zinc-400 mr-2">End Date:</label>
-            <input
-              type="date"
-              value={dateRange.end}
-              onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-              className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white"
-            />
-          </div>
+    <div className="space-y-6 pb-24 p-4">
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-1">Black Box</h1>
+          <p className="text-sm text-slate-400">Audit Log & Data Integrity</p>
         </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleSyncGarmin(false)}
+            disabled={isSyncing || (syncCooldown !== null && syncCooldown > 0)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
+              isSyncing || (syncCooldown !== null && syncCooldown > 0)
+                ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                : syncStatus === 'up_to_date'
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                : 'bg-slate-900 border-slate-700 text-white hover:bg-slate-800'
+            }`}
+            title={
+              syncStatus === 'up_to_date' 
+                ? `Last synced: ${lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'Recently'}`
+                : 'Sync Garmin activities'
+            }
+          >
+            {isSyncing ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span className="text-sm">Syncing...</span>
+              </>
+            ) : syncCooldown !== null && syncCooldown > 0 ? (
+              <>
+                <Clock className="w-4 h-4" />
+                <span className="text-sm">Wait {syncCooldown}m</span>
+              </>
+            ) : syncStatus === 'up_to_date' ? (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                <span className="text-sm">Up to Date</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                <span className="text-sm">Sync Garmin</span>
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => handleSyncGarmin(true)}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/20 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Update existing sessions with enhanced metadata (distance, pace, HR, etc.)"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span className="text-sm">Update</span>
+          </button>
+          <button
+            onClick={handleClearAllSessions}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/20 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Delete all synced sessions and re-sync from Garmin"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span className="text-sm">Clear & Re-sync</span>
+          </button>
+        </div>
+      </header>
+      
+      {syncMessage && (
+        <div className={`p-3 rounded-lg border ${
+          syncMessage.includes('Successfully') 
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+            : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+        }`}>
+          <p className="text-sm">{syncMessage}</p>
+        </div>
+      )}
 
-        {/* Sessions List */}
+      <div className="space-y-3">
         {sessions.length === 0 ? (
-          <div className="text-center py-12 text-zinc-400">
-            <p>No sessions found for the selected filters.</p>
+          <div className="text-center py-12 text-slate-400 space-y-4">
+            <p className="text-lg font-semibold">No sessions found</p>
+            <p className="text-sm">Sync Garmin data to see your training history.</p>
+            <button
+              onClick={() => handleSyncGarmin(false)}
+              disabled={isSyncing || (syncCooldown !== null && syncCooldown > 0)}
+              className="mt-4 px-6 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
+            >
+              <Download className="w-4 h-4" />
+              {isSyncing ? 'Syncing...' : 'Sync Garmin Now'}
+            </button>
           </div>
         ) : (
-          <div className="space-y-4">
-            {sessions.map((session) => (
-              <DecisionReviewCard key={session.id} session={session} />
-            ))}
-          </div>
+          sessions.map((session) => (
+            <button 
+              key={session.id} 
+              onClick={() => handleSelectSession(session)}
+              className="w-full bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:bg-slate-800 transition-colors text-left"
+            >
+              <div className="p-4 flex justify-between items-start">
+                <div className="flex gap-3">
+                  <div className={`mt-1 ${
+                    session.type === 'EXEC' ? 'text-emerald-500' : 'text-amber-500'
+                  }`}>
+                    {session.type === 'EXEC' ? <CheckCircle2 className="w-5 h-5" /> : <RefreshCw className="w-5 h-5" />}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs text-slate-500">{session.day}</span>
+                      {session.integrity === 'SUSPECT' && (
+                        <span className="text-[10px] bg-red-500/10 text-red-400 px-1.5 rounded border border-red-500/20">
+                          SUSPECT DATA
+                        </span>
+                      )}
+                      {session.integrity === 'VALID' && (
+                        <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 rounded">
+                          VALID
+                        </span>
+                      )}
+                      {session.compliance && (
+                        <span className={`text-[10px] px-1.5 rounded border ${
+                          session.compliance === 'COMPLIANT' 
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            : session.compliance === 'SUBSTITUTED'
+                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                            : 'bg-red-500/10 text-red-400 border-red-500/20'
+                        }`}>
+                          {session.compliance}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-bold text-white text-sm mb-1">{session.title}</h3>
+                    <div className="text-xs text-slate-400 space-y-0.5">
+                      {session.objective && (
+                        <div className="line-clamp-1">Mission: {session.objective}</div>
+                      )}
+                      <div className="flex items-center gap-3">
+                        {session.distance && (
+                          <span>{session.distance.toFixed(1)}km</span>
+                        )}
+                        {session.pace && (
+                          <span className={session.integrity === 'SUSPECT' ? 'text-red-400' : ''}>
+                            Pace: {session.integrity === 'SUSPECT' ? 'INVALID' : session.pace}
+                          </span>
+                        )}
+                        {session.trainingType && (
+                          <span>Type: {session.trainingType}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-lg font-mono font-bold text-slate-300">
+                    {typeof session.load === 'number' ? session.load : session.load}
+                  </div>
+                  <div className="text-[10px] text-slate-600">LOAD</div>
+                </div>
+              </div>
+              
+              {session.agentFeedback && (
+                <div className="bg-slate-950 px-4 py-2 border-t border-slate-800 flex gap-4 text-[10px] font-mono">
+                  <span className={session.agentFeedback.structural.includes('RED') ? 'text-red-400' : 'text-emerald-500'}>
+                    STRUCT: {session.agentFeedback.structural.split('.')[0]}
+                  </span>
+                  <span className={session.agentFeedback.metabolic.includes('AMBER') ? 'text-amber-400' : 'text-emerald-500'}>
+                    META: {session.agentFeedback.metabolic.split('.')[0]}
+                  </span>
+                </div>
+              )}
+            </button>
+          ))
         )}
       </div>
     </div>
@@ -192,4 +439,3 @@ export default function HistoryPage() {
     </AuthGuard>
   );
 }
-

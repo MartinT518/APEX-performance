@@ -4,6 +4,40 @@
 
 ---
 
+## Latest Check: Coach's Critiques Implementation (2025-01-XX)
+
+### ✅ All Coach's Critiques Addressed
+
+**Status**: VERIFIED - All implementations pass verification and align with "Zero-Error" philosophy.
+
+**Summary**:
+1. ✅ Probability capped at 85% (not just math fix)
+2. ✅ Training Plan shows provisional days with tooltip
+3. ✅ Log display shows INVALID for suspect data
+4. ✅ Decoupling uses client-side EF calculation (with fallback)
+5. ✅ Integrity Ratio uses unit normalization
+6. ✅ ValuationEngine ramps Vol_Req by phase
+7. ✅ Sync button shows status and auto-syncs
+
+**Files Modified**:
+- `src/app/dashboard/page.tsx` - Probability cap
+- `src/app/plan/page.tsx` - Provisional days
+- `src/app/history/page.tsx` - Data integrity + sync status
+- `src/components/shared/SessionDetailView.tsx` - Invalid data display
+- `src/app/lab/logic/dataLoader.ts` - Decoupling calculation
+- `src/app/lab/page.tsx` - Integrity ratio normalization
+- `src/modules/analyze/valuationEngine.ts` - Phase-based calculations
+
+**Known Limitations Documented**:
+- Decoupling calculation requires first/second half metrics in metadata (fallback implemented)
+- Integrity ratio may show 0% if no running volume (handled gracefully)
+
+**Verification Report**: See `MAKER_CHECK_REPORT.md` for full details.
+
+---
+
+---
+
 ## Resolution Summary
 
 All critical violations identified in the MAKER CHECK have been resolved:

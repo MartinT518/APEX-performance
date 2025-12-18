@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from 'react';
 import { RadialBarChart, RadialBar, PolarAngleAxis, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useMonitorStore } from '@/modules/monitor/monitorStore';
 
 interface ChassisGaugeProps {
   score: number; // 0-100
@@ -10,6 +12,10 @@ interface ChassisGaugeProps {
 }
 
 export function ChassisGauge({ score, tonnage, cadenceStability }: ChassisGaugeProps) {
+  const [showDetails, setShowDetails] = useState(false);
+  const monitor = useMonitorStore();
+  const daysSinceLift = monitor.getDaysSinceLastLift();
+  const niggleScore = monitor.todayEntries.niggleScore || 0;
   // Determine color based on score (Red < 50, Amber < 80, Green > 80)
   let fill = "#22c55e"; // Green
   if (score < 50) fill = "#ef4444"; // Red
@@ -24,7 +30,10 @@ export function ChassisGauge({ score, tonnage, cadenceStability }: ChassisGaugeP
   ];
 
   return (
-    <Card className="w-full max-w-sm border-zinc-800 bg-zinc-950 text-white">
+    <Card 
+      className="w-full max-w-sm border-zinc-800 bg-zinc-950 text-white cursor-pointer"
+      onClick={() => setShowDetails(!showDetails)}
+    >
       <CardHeader className="items-center pb-0">
         <CardTitle>Chassis Integrity</CardTitle>
         <CardDescription>Structural Health Score</CardDescription>
@@ -60,6 +69,20 @@ export function ChassisGauge({ score, tonnage, cadenceStability }: ChassisGaugeP
               <span className="text-xs text-zinc-400 mt-1">SIS Scored</span>
             </div>
         </div>
+        
+        {showDetails && (
+          <div className="mt-4 p-3 bg-zinc-900 rounded border border-zinc-700 text-sm space-y-1">
+            <div className="text-zinc-300">
+              <span className="text-zinc-500">Days Since Last Lift:</span> {daysSinceLift} {daysSinceLift === 1 ? 'day' : 'days'}
+            </div>
+            <div className="text-zinc-300">
+              <span className="text-zinc-500">Niggle Score:</span> {niggleScore}/10
+            </div>
+            <div className="text-zinc-300">
+              <span className="text-zinc-500">Cadence Stability:</span> +{cadenceStability}% vs Baseline
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

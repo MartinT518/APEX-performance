@@ -36,3 +36,10 @@
 * **System Patterns:** [@memory/system_patterns.md](memory/system_patterns.md)
 * **Gold Standards:** [@memory/gold_standards.md](memory/gold_standards.md)
 * **Error Registry:** [@memory/error_registry.md](memory/error_registry.md)
+
+## 6. Prototype Regeneration Notes
+* **Source:** `app.tsx.prototype` (1133 lines) - Exact workflow and UI/UX specification
+* **Status:** Regenerated with real data integration (Supabase + Garmin MCP)
+* **Known Issues:** Page files exceed 100-line MAKER limit (intentional for prototype fidelity)
+* **Type Adapters:** `src/types/prototype.ts` bridges prototype types with database schema
+* **Decomposition:** Follow-up optimization task to split large page files into `logic/` subdirectories
