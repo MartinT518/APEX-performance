@@ -1,4 +1,4 @@
-export type VoteColor = 'RED' | 'AMBER' | 'GREEN';
+export type VoteColor = 'RED' | 'AMBER' | 'GREEN' | 'REJECTED';
 
 export interface IFlaggedMetric {
   metric: string;
@@ -12,6 +12,32 @@ export interface IAgentVote {
   confidence: number; // 0.0 - 1.0
   reason: string;
   flaggedMetrics: IFlaggedMetric[];
+  score?: number; // 0-100 normalized risk score (optional for backward compatibility)
+}
+
+// Data Integrity Agent types
+export type IntegrityStatus = 'VALID' | 'SUSPECT' | 'REJECTED';
+
+export interface SessionIntegrity {
+  status: IntegrityStatus;
+  confidence: number; // 0.0 - 1.0
+  flags: string[];
+  reason?: string;
+}
+
+export interface IDataIntegrityInput {
+  sessionPoints: import('@/types/session').ISessionDataPoint[];
+  phenotypeProfile: import('@/types/phenotype').IPhenotypeProfile;
+  diagnostics?: {
+    highRevDiagnostics?: { flaggedIndices: number[] };
+    cadenceLockDiagnostics?: { flaggedIndices: number[] };
+    dropoutDiagnostics?: { flaggedIndices: number[] };
+    clippingDiagnostics?: { flaggedIndices: number[] };
+  };
+}
+
+export interface IDataIntegrityVote extends IAgentVote {
+  status: IntegrityStatus;
 }
 
 export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power';

@@ -1,21 +1,24 @@
-import { useMonitorStore } from '../../monitor/monitorStore';
-import { checkAuditNecessity } from '../../monitor/logic/auditManager';
+import { checkAuditGating, type AuditGatingInput } from './auditGating';
 import type { GarminClient } from '../../monitor/ingestion/garminClient';
 import { logger } from '@/lib/logger';
+
+export type { AuditGatingInput };
 
 export type AuditStatus = 'AUDIT_PENDING' | 'CAUTION' | 'NOMINAL';
 
 /**
  * Performs daily audit: checks if user inputs are required
+ * 
+ * Now uses pure auditGating function instead of zustand stores
  */
 export async function performDailyAudit(
-  lastRunDuration: number,
+  auditInputs: AuditGatingInput,
   garminClient: GarminClient | null
 ): Promise<AuditStatus> {
   logger.info(">> Step 2: Active User Ingestion");
   
   // Use real Garmin data if available for duration check
-  let realDuration = lastRunDuration;
+  let realDuration = auditInputs.lastRunDuration;
   
   if (garminClient) {
     try {
@@ -31,15 +34,19 @@ export async function performDailyAudit(
     }
   }
 
-  const audit = checkAuditNecessity(realDuration);
+  // Use pure audit gating function
+  const audit = checkAuditGating({
+    ...auditInputs,
+    lastRunDuration: realDuration
+  });
   
-  if (audit.requiresAudit) {
-    logger.warn(`[AUDIT REQUIRED] ${audit.auditType}: ${audit.message}`);
+  if (audit.auditRequired) {
+    logger.warn(`[AUDIT REQUIRED] ${audit.auditType}: Missing inputs: ${audit.missingInputs.join(', ')}`);
     return 'AUDIT_PENDING';
   }
   
-  const monitor = useMonitorStore.getState();
-  if (monitor.todayEntries.niggleScore && monitor.todayEntries.niggleScore > 3) {
+  // Check for caution (niggle > 3 but not blocking)
+  if (auditInputs.niggleScore !== null && auditInputs.niggleScore > 3) {
     return 'CAUTION';
   }
   

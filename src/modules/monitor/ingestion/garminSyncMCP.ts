@@ -15,6 +15,7 @@ import { sessionResultToLogData } from '@/modules/dailyCoach/logic/persistence';
 import type { SessionProcessingResult } from '@/modules/dailyCoach/logic/sessionProcessor';
 
 import { adaptGarminToSessionStream } from './garminAdapter';
+import type { ISessionDataPoint } from '@/types/session';
 import path from 'path';
 
 /**
@@ -35,8 +36,9 @@ interface MCPActivity {
   startTimeGMT: string;
   startTimeLocal: string;
   endTimeLocal?: string; // May be available
-  durationInSeconds?: number; // May be undefined, check multiple sources
-  duration?: number; // Alternative field name
+  durationInSeconds?: number; // Primary field from Python script (extracted by extract_duration)
+  elapsedDurationInSeconds?: number; // Alternative field name (from Garmin API directly)
+  duration?: number | { seconds?: number; formatted?: string }; // Alternative field name or object
   elapsedDuration?: number; // Another alternative
   totalDuration?: number; // Another alternative
   distance?: number; // Distance in meters
@@ -64,11 +66,18 @@ interface MCPResponse {
  * Syncs Garmin activities using MCP server's Python client
  * This provides token persistence and efficient date-range queries
  */
+export interface GarminSyncResult {
+  synced: number;
+  errors: number;
+  fallbackAvailable?: boolean;
+  errorMessage?: string;
+}
+
 export async function syncGarminSessionsToDatabaseMCP(
   startDate: string,
   endDate: string,
   userId: string
-): Promise<{ synced: number; errors: number }> {
+): Promise<GarminSyncResult> {
   try {
     const supabase = createServerClient();
 
@@ -78,27 +87,66 @@ export async function syncGarminSessionsToDatabaseMCP(
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'sync-garmin-mcp.py');
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
-    const { stdout, stderr } = await execAsync(
-      `${pythonCmd} "${scriptPath}" "${startDate}" "${endDate}"`,
-      {
-        cwd: process.cwd(),
-        maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large responses
-      }
-    );
+    let stdout: string;
+    let stderr: string;
+    
+    try {
+      const result = await execAsync(
+        `${pythonCmd} "${scriptPath}" "${startDate}" "${endDate}"`,
+        {
+          cwd: process.cwd(),
+          maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large responses
+        }
+      );
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (execError) {
+      // Python script execution failed
+      logger.error('Python script execution failed', execError);
+      const errorMessage = execError instanceof Error ? execError.message : String(execError);
+      return {
+        synced: 0,
+        errors: 1,
+        fallbackAvailable: true,
+        errorMessage: `Garmin sync script failed: ${errorMessage}. Manual entry available.`
+      };
+    }
 
     if (stderr) {
       logger.warn('Python script stderr:', stderr);
     }
 
-    const result: MCPResponse = JSON.parse(stdout);
+    let result: MCPResponse;
+    try {
+      result = JSON.parse(stdout);
+    } catch (parseError) {
+      logger.error('Failed to parse Python script output', parseError);
+      logger.error('Raw stdout:', stdout.substring(0, 500));
+      return {
+        synced: 0,
+        errors: 1,
+        fallbackAvailable: true,
+        errorMessage: 'Failed to parse Garmin sync response. Manual entry available.'
+      };
+    }
 
     if (!result.success) {
       if (result.error === 'RATE_LIMITED') {
         logger.warn('Garmin rate limited via MCP client');
-        return { synced: 0, errors: 1 };
+        return {
+          synced: 0,
+          errors: 1,
+          fallbackAvailable: true,
+          errorMessage: 'Garmin API rate limited. Please try again later or use manual entry.'
+        };
       }
       logger.error(`MCP sync failed: ${result.message || result.error}`);
-      return { synced: 0, errors: 1 };
+      return {
+        synced: 0,
+        errors: 1,
+        fallbackAvailable: true,
+        errorMessage: result.message || result.error || 'Garmin sync failed. Manual entry available.'
+      };
     }
 
     if (!result.activities || result.activities.length === 0) {
@@ -107,6 +155,28 @@ export async function syncGarminSessionsToDatabaseMCP(
     }
 
     logger.info(`Fetched ${result.activities.length} activities from Garmin via MCP`);
+    
+    // Debug: Log first activity structure to verify Python response format
+    if (result.activities.length > 0) {
+      const firstActivity = result.activities[0];
+      logger.info(`📊 Sample activity structure from Python script:`, {
+        activityId: firstActivity.activityId,
+        activityName: firstActivity.activityName,
+        durationInSeconds: firstActivity.durationInSeconds,
+        durationType: typeof firstActivity.durationInSeconds,
+        hasDetails: !!firstActivity.details,
+        startTimeLocal: firstActivity.startTimeLocal,
+        endTimeLocal: firstActivity.endTimeLocal,
+        keys: Object.keys(firstActivity)
+      });
+      
+      // If duration is 0, log warning immediately
+      if (firstActivity.durationInSeconds === 0) {
+        logger.error(`❌ WARNING: First activity has durationInSeconds = 0 from Python script!`);
+        logger.error(`   This suggests the Python extract_duration() function failed`);
+        logger.error(`   Check Python script logs for duration extraction errors`);
+      }
+    }
 
     let synced = 0;
     let errors = 0;
@@ -173,149 +243,199 @@ export async function syncGarminSessionsToDatabaseMCP(
         const activityDate = new Date(activity.startTimeLocal).toISOString().split('T')[0];
         const sportType = mapGarminSportType(activity.activityType);
         
-        // Process activity details if available from Python script
-        let processingResult: SessionProcessingResult;
-        
-        if (activity.details) {
-          // Convert Garmin details to session stream
-          try {
-            const stream = adaptGarminToSessionStream(activity.details);
-            
-            processingResult = {
-              points: stream.dataPoints,
-              diagnostics: {
-                status: 'VALID',
-                validPointCount: stream.dataPoints.length,
-                originalPointCount: stream.dataPoints.length,
-                flaggedIndices: []
-              },
-              metadata: {
-                dataSource: 'GARMIN',
-                activityId: `${activity.activityId}`,
-                activityName: activity.activityName,
-                timestamp: new Date(activity.startTimeLocal).toISOString(),
-                // Extract additional metrics from activity object
-                distanceKm: activity.distance ? (activity.distance as number) / 1000 : undefined,
-                distanceInMeters: activity.distance as number | undefined,
-                avgPace: activity.averagePace ? formatPaceFromSeconds(activity.averagePace as number) : undefined,
-                averagePace: activity.averagePace as number | undefined, // seconds per km
-                avgHR: activity.averageHR as number | undefined,
-                maxHR: activity.maxHR as number | undefined,
-                avgRunCadence: activity.avgRunCadence as number | undefined,
-                calories: activity.calories as number | undefined,
-                elevationGain: activity.elevationGain as number | undefined,
-                trainingType: activity.activityType as string | undefined
-              }
-            };
-          } catch (streamError) {
-            logger.warn(`Failed to adapt activity ${activity.activityId} to session stream`, streamError);
-            // Fall through to empty points
-            processingResult = {
-              points: [],
-              diagnostics: {
-                status: 'VALID',
-                validPointCount: 0,
-                originalPointCount: 0,
-                flaggedIndices: []
-              },
-              metadata: {
-                dataSource: 'GARMIN',
-                activityId: `${activity.activityId}`,
-                activityName: activity.activityName,
-                timestamp: new Date(activity.startTimeLocal).toISOString(),
-                // Extract additional metrics from activity object even without data points
-                distanceKm: activity.distance ? (activity.distance as number) / 1000 : undefined,
-                distanceInMeters: activity.distance as number | undefined,
-                avgPace: activity.averagePace ? formatPaceFromSeconds(activity.averagePace as number) : undefined,
-                averagePace: activity.averagePace as number | undefined,
-                avgHR: activity.averageHR as number | undefined,
-                maxHR: activity.maxHR as number | undefined,
-                avgRunCadence: activity.avgRunCadence as number | undefined,
-                calories: activity.calories as number | undefined,
-                elevationGain: activity.elevationGain as number | undefined,
-                trainingType: activity.activityType as string | undefined
-              }
-            };
-          }
-        } else {
-          // Fallback if details not available
-          processingResult = {
-            points: [],
-            diagnostics: {
-              status: 'VALID',
-              validPointCount: 0,
-              originalPointCount: 0,
-              flaggedIndices: []
-            },
-            metadata: {
-              dataSource: 'GARMIN',
-              activityId: `${activity.activityId}`,
-              activityName: activity.activityName,
-              timestamp: new Date(activity.startTimeLocal).toISOString()
-            }
-          };
-        }
-
-        // Calculate duration - check multiple sources
-        // The MCP Python response builder formats duration as { seconds: number, formatted: string }
+        // Calculate duration FIRST - check multiple sources in order of reliability
+        // The Python script's extract_duration() function returns durationInSeconds
+        // But we also check other fields as fallbacks
         let durationSeconds: number | undefined;
         
-        // Check if duration is an object (formatted by Python)
-        if (activity.duration && typeof activity.duration === 'object') {
-          const durationObj = activity.duration as { seconds?: number; formatted?: string };
-          durationSeconds = durationObj.seconds;
-        } else {
-          // Check flat fields
-          durationSeconds = activity.durationInSeconds || 
-                           (typeof activity.duration === 'number' ? activity.duration : undefined) ||
-                           activity.elapsedDuration || 
-                           activity.totalDuration;
+        // Priority 1: Check durationInSeconds (primary field from Python script)
+        // The Python script's extract_duration() function sets this field
+        if (activity.durationInSeconds !== undefined && 
+            activity.durationInSeconds !== null && 
+            typeof activity.durationInSeconds === 'number' &&
+            activity.durationInSeconds > 0) {
+          durationSeconds = activity.durationInSeconds;
+          logger.info(`Activity ${activity.activityId}: Using durationInSeconds from Python script: ${durationSeconds}`);
         }
         
-        // Log activity structure for debugging (first time only)
-        if (i === 0) {
-          logger.info(`Sample activity keys:`, Object.keys(activity));
-          logger.info(`Sample duration field:`, activity.duration);
-        }
-        logger.info(`Activity ${activity.activityId}: duration=${JSON.stringify(activity.duration)}, durationInSeconds=${activity.durationInSeconds}, distance=${activity.distance}`);
-        
-        // Try to calculate from start/end time if duration not available
-        if (!durationSeconds && activity.startTimeLocal && activity.endTimeLocal) {
-          const start = new Date(activity.startTimeLocal);
-          const end = new Date(activity.endTimeLocal);
-          durationSeconds = Math.round((end.getTime() - start.getTime()) / 1000);
-          logger.info(`Calculated duration from start/end times: ${durationSeconds} seconds`);
+        // Priority 2: Check elapsedDurationInSeconds (direct from Garmin API if Python didn't extract)
+        if (!durationSeconds && activity.elapsedDurationInSeconds !== undefined && 
+            activity.elapsedDurationInSeconds !== null && 
+            typeof activity.elapsedDurationInSeconds === 'number' &&
+            activity.elapsedDurationInSeconds > 0) {
+          durationSeconds = activity.elapsedDurationInSeconds;
+          logger.info(`Activity ${activity.activityId}: Using elapsedDurationInSeconds: ${durationSeconds}`);
         }
         
-        // Try to extract from details if still not found
-        if (!durationSeconds && activity.details) {
-          const details = activity.details as Record<string, unknown>;
-          
-          // Check if details.duration is an object
-          if (details.duration && typeof details.duration === 'object') {
-            const durationObj = details.duration as { seconds?: number };
-            durationSeconds = durationObj.seconds;
-          } else {
-            durationSeconds = details.duration as number | undefined ||
-                            details.durationInSeconds as number | undefined ||
-                            details.elapsedDuration as number | undefined ||
-                            details.totalDuration as number | undefined ||
-                            (details.summaryDTO as Record<string, unknown> | undefined)?.duration as number | undefined ||
-                            (details.summaryDTO as Record<string, unknown> | undefined)?.elapsedDuration as number | undefined;
+        // Priority 3: Check if duration is an object (formatted by Python or Garmin API)
+        if (!durationSeconds && activity.duration && typeof activity.duration === 'object') {
+          const durationObj = activity.duration as { seconds?: number; totalSeconds?: number; formatted?: string };
+          durationSeconds = durationObj.seconds || durationObj.totalSeconds;
+          if (durationSeconds) {
+            logger.info(`Activity ${activity.activityId}: Using duration object seconds: ${durationSeconds}`);
           }
-          
-          logger.info(`Extracted duration from details: ${durationSeconds}`);
+        }
+        
+        // Priority 4: Check flat numeric duration field
+        if (!durationSeconds && typeof activity.duration === 'number' && activity.duration > 0) {
+          durationSeconds = activity.duration;
+          logger.info(`Activity ${activity.activityId}: Using flat duration number: ${durationSeconds}`);
+        }
+        
+        // Priority 5: Check other alternative fields
+        if (!durationSeconds) {
+          durationSeconds = activity.elapsedDuration || activity.totalDuration;
+          if (durationSeconds) {
+            logger.info(`Activity ${activity.activityId}: Using alternative duration field: ${durationSeconds}`);
+          }
+        }
+        
+        // Priority 4: Try to calculate from start/end time if duration not available
+        if (!durationSeconds && activity.startTimeLocal && activity.endTimeLocal) {
+          try {
+            const start = new Date(activity.startTimeLocal);
+            const end = new Date(activity.endTimeLocal);
+            if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && end > start) {
+              durationSeconds = Math.round((end.getTime() - start.getTime()) / 1000);
+              logger.info(`Activity ${activity.activityId}: Calculated duration from start/end times: ${durationSeconds} seconds`);
+            }
+          } catch (dateError) {
+            logger.warn(`Activity ${activity.activityId}: Failed to parse start/end times for duration calculation`, dateError);
+          }
+        }
+        
+        // Priority 5: Try to extract from details if still not found
+        if (!durationSeconds && activity.details) {
+          try {
+            const details = activity.details as Record<string, unknown>;
+            
+            // Check if details.duration is an object
+            if (details.duration && typeof details.duration === 'object') {
+              const durationObj = details.duration as { seconds?: number };
+              durationSeconds = durationObj.seconds;
+            } else {
+              // Check various duration fields in details
+              durationSeconds = details.elapsedDurationInSeconds as number | undefined ||
+                              details.duration as number | undefined ||
+                              details.durationInSeconds as number | undefined ||
+                              details.elapsedDuration as number | undefined ||
+                              details.totalDuration as number | undefined ||
+                              (details.summaryDTO as Record<string, unknown> | undefined)?.elapsedDurationInSeconds as number | undefined ||
+                              (details.summaryDTO as Record<string, unknown> | undefined)?.duration as number | undefined ||
+                              (details.summaryDTO as Record<string, unknown> | undefined)?.elapsedDuration as number | undefined;
+            }
+            
+            if (durationSeconds) {
+              logger.info(`Activity ${activity.activityId}: Extracted duration from details: ${durationSeconds}`);
+            }
+          } catch (detailsError) {
+            logger.warn(`Activity ${activity.activityId}: Failed to extract duration from details`, detailsError);
+          }
         }
         
         // If still no duration, log full activity structure for debugging
-        if (!durationSeconds) {
-          logger.warn(`No duration found for activity ${activity.activityId} (${activity.activityName}). Activity keys:`, Object.keys(activity));
-          logger.warn(`Full activity (first 500 chars):`, JSON.stringify(activity, null, 2).substring(0, 500));
+        if (!durationSeconds || durationSeconds === 0) {
+          logger.error(`❌ CRITICAL: No valid duration found for activity ${activity.activityId} (${activity.activityName})`);
+          logger.error(`   This activity will be SKIPPED to avoid storing invalid data`);
+          logger.error(`   Activity keys:`, Object.keys(activity));
+          logger.error(`   Python script returned durationInSeconds: ${activity.durationInSeconds}`);
+          logger.error(`   Duration fields checked: duration=${JSON.stringify(activity.duration)}, elapsedDuration=${activity.elapsedDuration}, elapsedDurationInSeconds=${activity.elapsedDurationInSeconds}`);
+          logger.error(`   Start/End times: startTimeLocal=${activity.startTimeLocal}, endTimeLocal=${activity.endTimeLocal}`);
+          
+          if (i === 0) {
+            // Log full structure for first activity to help debug
+            logger.error(`   Full activity structure (first 2000 chars):`, JSON.stringify(activity, null, 2).substring(0, 2000));
+          }
+          
+          // Skip this activity - don't store invalid data
+          logger.warn(`⚠️ Skipping activity ${activity.activityId} due to missing duration`);
+          errors++;
+          continue; // Skip to next activity
         }
         
-        const durationMinutes = durationSeconds ? Math.round(durationSeconds / 60) : 0;
-        logger.info(`Final duration for ${activity.activityId}: ${durationMinutes} minutes (from ${durationSeconds || 0} seconds)`);
-        const sessionLogData = sessionResultToLogData(processingResult, durationMinutes, activityDate);
+        const durationMinutes = Math.round(durationSeconds / 60);
+        
+        // Validate duration is reasonable (at least 1 minute, at most 24 hours)
+        if (durationMinutes < 1) {
+          logger.error(`❌ Invalid duration: ${durationMinutes} minutes (from ${durationSeconds} seconds) for activity ${activity.activityId}`);
+          logger.warn(`⚠️ Skipping activity ${activity.activityId} due to invalid duration`);
+          errors++;
+          continue;
+        }
+        
+        if (durationMinutes > 1440) { // 24 hours
+          logger.warn(`⚠️ Suspiciously long duration: ${durationMinutes} minutes for activity ${activity.activityId} - storing anyway`);
+        }
+        
+        logger.info(`✅ Final duration for ${activity.activityId}: ${durationMinutes} minutes (from ${durationSeconds} seconds)`);
+        
+        // Process activity details if available from Python script
+        // NOTE: Activities can have summary data (duration, distance, etc.) even without detail metrics
+        // So we should store the activity even if pointCount is 0, as long as we have duration
+        let processingResult: SessionProcessingResult;
+        
+        let dataPoints: ISessionDataPoint[] = [];
+        let pointCount = 0;
+        
+        if (activity.details) {
+          // Try to convert Garmin details to session stream
+          try {
+            const stream = adaptGarminToSessionStream(activity.details);
+            dataPoints = stream.dataPoints;
+            pointCount = stream.dataPoints.length;
+            
+            if (pointCount === 0) {
+              logger.info(`Activity ${activity.activityId}: No time-series data points found, but summary data available`);
+              logger.info(`   This is normal for some activities - storing summary data only`);
+            } else {
+              logger.info(`Activity ${activity.activityId}: Extracted ${pointCount} data points`);
+            }
+          } catch (streamError) {
+            logger.warn(`Failed to adapt activity ${activity.activityId} to session stream`, streamError);
+            logger.info(`   Continuing with summary data only (duration, distance, etc.)`);
+            // Continue with empty points - we still have summary data
+            dataPoints = [];
+            pointCount = 0;
+          }
+        } else {
+          logger.info(`Activity ${activity.activityId}: No detail metrics available, using summary data only`);
+        }
+        
+        // Build processing result with summary data (even if no data points)
+        // This is valid - many activities have summary stats but no time-series data
+        processingResult = {
+          points: dataPoints,
+          diagnostics: {
+            status: 'VALID', // Valid even if no time-series data (summary data is available)
+            validPointCount: pointCount,
+            originalPointCount: pointCount,
+            flaggedIndices: []
+          },
+          metadata: {
+            dataSource: 'GARMIN',
+            activityId: `${activity.activityId}`,
+            activityName: activity.activityName,
+            timestamp: new Date(activity.startTimeLocal).toISOString(),
+            // Extract additional metrics from activity object (summary data)
+            distanceKm: activity.distance ? (activity.distance as number) / 1000 : undefined,
+            distanceInMeters: activity.distance as number | undefined,
+            avgPace: activity.averagePace ? formatPaceFromSeconds(activity.averagePace as number) : undefined,
+            averagePace: activity.averagePace as number | undefined, // seconds per km
+            avgHR: activity.averageHR as number | undefined,
+            maxHR: activity.maxHR as number | undefined,
+            avgRunCadence: activity.avgRunCadence as number | undefined,
+            calories: activity.calories as number | undefined,
+            elevationGain: activity.elevationGain as number | undefined,
+            trainingType: activity.activityType as string | undefined,
+            // Store duration in metadata for reference
+            durationInSeconds: durationSeconds,
+            durationMinutes: durationMinutes,
+            // Note: requiresManualDuration is false since we have valid duration
+            hasTimeSeriesData: pointCount > 0
+          }
+        };
+
+const sessionLogData = sessionResultToLogData(processingResult, durationMinutes, activityDate);
         
         // Insert into database
         const insertData = {
@@ -348,7 +468,13 @@ export async function syncGarminSessionsToDatabaseMCP(
     return { synced, errors };
   } catch (err) {
     logger.error('Garmin sync failed (MCP)', err);
-    return { synced: 0, errors: 1 };
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return {
+      synced: 0,
+      errors: 1,
+      fallbackAvailable: true,
+      errorMessage: `Garmin sync error: ${errorMessage}. Manual entry available.`
+    };
   }
 }
 

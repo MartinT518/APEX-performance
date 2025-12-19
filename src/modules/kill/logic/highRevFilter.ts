@@ -21,9 +21,21 @@ export const validateHighRevPhysiology = (
   const { max_hr_override } = profile.config;
   const isHighRev = profile.is_high_rev;
 
-  // Age calculation is approximated here or fetched from profile if added later
-  // For now, using a standard "Age Max" proxy of 190 for non-High-Rev filtering
-  const STANDARD_PHYSIOLOGICAL_CEILING = 195; 
+  // Calculate age-predicted max HR: 220 - age
+  // If age is not provided, use standard physiological ceiling
+  let agePredictedMaxHR: number;
+  if (profile.age && profile.age > 0) {
+    agePredictedMaxHR = 220 - profile.age;
+  } else {
+    // Default to standard physiological ceiling if age not available
+    agePredictedMaxHR = 195;
+  }
+  
+  // For high-rev users, use max_hr_override if set, otherwise use age-predicted max
+  // For non-high-rev users, use age-predicted max (or standard ceiling if age not available)
+  const physiologicalCeiling = isHighRev && max_hr_override 
+    ? max_hr_override 
+    : agePredictedMaxHR; 
 
   points.forEach((point, index) => {
     // 1. Absolute Ceiling Check (e.g. > 240 is likely noise for anyone)
@@ -36,14 +48,18 @@ export const validateHighRevPhysiology = (
       return;
     }
 
-    // 2. High-Rev Logic
-    if (point.heartRate > STANDARD_PHYSIOLOGICAL_CEILING) {
+    // 2. High-Rev Logic - Check against age-predicted max or override
+    if (point.heartRate > physiologicalCeiling) {
       if (!isHighRev) {
-        // Normal physiology shouldn't live here for long -> Suspect
+        // Normal physiology shouldn't exceed age-predicted max -> Suspect
         flaggedIndices.push(index);
       } else {
-        // High-Rev Phenotype ALLOWS this, but check specific override
-        if (point.heartRate > max_hr_override) {
+        // High-Rev Phenotype ALLOWS higher HR, but check specific override
+        // CRITICAL: Allow HR up to max_hr_override + 5 (e.g., 185bpm for high-rev user)
+        // If max_hr_override is set, use it + 5 as absolute ceiling
+        // Otherwise, allow up to age-predicted max + 10bpm tolerance
+        const highRevCeiling = max_hr_override ? (max_hr_override + 5) : (agePredictedMaxHR + 10);
+        if (point.heartRate > highRevCeiling) {
           flaggedIndices.push(index);
         }
       }

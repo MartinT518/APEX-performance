@@ -1,9 +1,10 @@
 # System Patterns
 
 ## 1. Component Architecture
-* **Module-Based Structure:** Code is organized by the 4 Core Modules:
+* **Module-Based Structure:** Code is organized by the 5 Core Modules:
     * `src/modules/monitor` (M): Inputs (Niggle Slider, Strength Log).
     * `src/modules/kill` (K): Data Processing (High-Rev Filter, Decoupling).
+    * `src/modules/analyze` (A): Context & Forecasting (Baseline Engine, Blueprint Engine, Valuation Engine).
     * `src/modules/execute` (E): Agents (Structural, Metabolic, Fueling).
     * `src/modules/review` (R): Coach Logic (Substitution Matrix).
 * **Atomic Design:** Inside modules, use `atoms` (UI), `logic` (Hooks/Utils), and `features` (Complex Views).
@@ -25,6 +26,7 @@
 * **Stores:** Split stores by Module.
     * `useMonitorStore` (Inputs: Niggle, Strength)
     * `usePhenotypeStore` (Config: Max HR, Weaknesses)
+    * `useAnalyzeStore` (Baselines: HRV, Tonnage, Confidence Score)
     * `usePlanStore` (Output: Today's Workout)
 
 ## 5. Error Handling
@@ -39,8 +41,10 @@
 ## 7. Math & Logic Patterns
 * **EWMA Memory:**
     * Baselines (HRV, Load) use **Exponential Weighted Moving Averages** (7-day and 28-day) rather than simple arithmetic means. This prioritizes recent context while retaining history.
+    * Implemented in `src/modules/analyze/baselineEngine.ts` with `calculateEWMA()` function.
 * **Probabilistic Forecasting:**
     * Long-term success is not a binary. It is a **Monte Carlo Probability** (0-100%) derived from current adherence and injury risk.
+    * Implemented in `src/modules/analyze/blueprintEngine.ts` with `runMonteCarloSimulation()` function.
 
 ## 8. UI Patterns
 * **Agent Signaling:**
@@ -210,3 +214,38 @@
     * Green background (`bg-emerald-500/10`) when up to date.
     * Tooltip shows last sync time: `title="Last synced: {time}"`.
     * Button serves as fallback, not primary interaction - status is automatic.
+
+## 20. Module A (Analyze) Patterns
+* **Purpose:** Context & Forecasting - Establishes baselines and calculates probabilities for long-term goal achievement.
+* **Core Components:**
+    * `baselineEngine.ts` (FR-A1): Calculates rolling statistics using EWMA for HRV (7-day) and Tonnage (28-day).
+    * `blueprintEngine.ts` (FR-A2): Runs Monte Carlo simulations to generate confidence scores for goal achievement.
+    * `valuationEngine.ts`: Implements three core equations (Smart Adherence, Integrity Ratio, Blueprint Probability).
+    * `analyzeStore.ts`: Zustand store managing baseline state and history.
+* **Baseline Calculation Pattern:**
+    * Uses EWMA (Exponential Weighted Moving Average) for adaptive baselines.
+    * Formula: `EMA_today = (Value_today * alpha) + (EMA_yesterday * (1 - alpha))` where `alpha = 2 / (N + 1)`.
+    * HRV uses 7-day window (more responsive), Tonnage uses 28-day window (more stable).
+    * Updates occur post-Module K (only clean data used).
+* **Blueprint Engine Pattern:**
+    * Monte Carlo simulation runs 1000 season futures.
+    * Algorithm: `dP/dt = Training_Load * exp(-Injury_Risk)`.
+    * Uses linear regression to determine trajectory from current load.
+    * Returns success probability (0-100%) and confidence level (LOW/MEDIUM/HIGH).
+* **Valuation Engine Pattern:**
+    * **Equation A (Smart Adherence)**: `Sum(V_eff * I_comp) / Sum(V_plan)`.
+        * Valid structural vetoes count as 0.8 adherence, not failure.
+        * MISSED sessions contribute 0.
+    * **Equation B (Integrity Ratio)**: `RollingAvg(Strength_Load) / RollingAvg(Run_Volume)`.
+        * Normalizes units: `(Tonnage/1000) / (Volume/10)` to prevent meaningless ratios.
+        * Goal ratio: 0.8 (chassis supports engine).
+    * **Equation C (Blueprint Probability)**: `Base_Prob + (Alpha * (Vol_Banked - Vol_Req)) - (Beta * Risk_Penalty)`.
+        * Phase-aware volume requirements: Phase 1 (60%), Phase 2 (80%), Phase 3 (100%), Phase 4 (50% taper).
+        * Phase 3 penalty: If weekly volume < 50km, probability drops by 30%.
+        * Maximum probability capped at 85% (never promise certainty).
+* **State Management:**
+    * `useAnalyzeStore` manages baselines and history.
+    * Persists to Supabase `baseline_metrics` table.
+    * Falls back to localStorage for offline support.
+* **Data Flow:**
+    * `Sensor Data` -> `Module K (Clean Data)` -> `Module A (Update Baselines)` -> `Module A (Calculate Probability)` -> `Module R (Coach Synthesis)` -> `UI Display`.

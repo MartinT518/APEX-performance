@@ -42,6 +42,27 @@ export interface ISubstitutionResult {
   finalWorkout: IWorkout;
   reasoning: string;
   modifications: string[]; // List of specific changes e.g. ["Downgraded Intensity", "Switched to Bike"]
+  ruleVersion?: string; // Version of substitution table used (for audit trail)
+}
+
+export interface CoachAuditLog {
+  id: string;
+  sessionId: string | null;
+  userId: string;
+  ruleVersion: string;
+  voteCombination: string;
+  decisionPath: string;
+  substitutionApplied: string | null;
+  actionTaken: 'EXECUTED_AS_PLANNED' | 'MODIFIED' | 'SKIPPED';
+  reasoning: string;
+  dataIntegrityStatus: 'VALID' | 'SUSPECT' | 'REJECTED' | null;
+  createdAt: string;
+}
+
+export interface SubstitutionTable {
+  version: string;
+  description: string;
+  rules: Record<string, any>;
 }
 
 export interface PhaseDefinition {

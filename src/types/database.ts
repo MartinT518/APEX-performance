@@ -80,6 +80,7 @@ export interface Database {
           tonnage: number | null;
           fueling_logged: boolean;
           fueling_carbs_per_hour: number | null;
+          fueling_gi_distress: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -93,6 +94,7 @@ export interface Database {
           tonnage?: number | null;
           fueling_logged?: boolean;
           fueling_carbs_per_hour?: number | null;
+          fueling_gi_distress?: number | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -106,6 +108,51 @@ export interface Database {
           tonnage?: number | null;
           fueling_logged?: boolean;
           fueling_carbs_per_hour?: number | null;
+          fueling_gi_distress?: number | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      daily_decision_snapshot: {
+        Row: {
+          id: string;
+          user_id: string;
+          date: string;
+          global_status: 'GO' | 'ADAPTED' | 'SHUTDOWN';
+          reason: string;
+          votes_jsonb: Json;
+          final_workout_jsonb: Json;
+          certainty_score: number | null;
+          certainty_delta: number | null;
+          inputs_summary_jsonb: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          date: string;
+          global_status: 'GO' | 'ADAPTED' | 'SHUTDOWN';
+          reason: string;
+          votes_jsonb: Json;
+          final_workout_jsonb: Json;
+          certainty_score?: number | null;
+          certainty_delta?: number | null;
+          inputs_summary_jsonb?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          date?: string;
+          global_status?: 'GO' | 'ADAPTED' | 'SHUTDOWN';
+          reason?: string;
+          votes_jsonb?: Json;
+          final_workout_jsonb?: Json;
+          certainty_score?: number | null;
+          certainty_delta?: number | null;
+          inputs_summary_jsonb?: Json | null;
           created_at?: string;
           updated_at?: string;
         };

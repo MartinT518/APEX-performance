@@ -42,6 +42,82 @@ from garmin_connect_mcp.client import (
 from garmin_connect_mcp.auth import load_config
 
 
+def extract_duration(activity: dict, details: dict | None = None) -> tuple[int, str]:
+    """
+    Extract duration from activity data.
+    
+    Based on actual Garmin API response structure:
+    - duration: float number (seconds) - primary field
+    - elapsedDuration: float number (seconds) - fallback
+    - elapsedDurationInSeconds: float number (seconds) - alternative fallback
+    
+    The Garmin API consistently returns duration as a float number, not an object.
+    
+    Args:
+        activity: Activity data from list response (get_activities_by_date)
+        details: Optional full activity details from get_activity()
+    
+    Returns:
+        Tuple of (duration_seconds, source_used)
+    """
+    # Priority 1: Check duration (direct float number from Garmin API)
+    # This is the most common case - Garmin returns duration as a float
+    duration = activity.get('duration')
+    if duration is not None:
+        # Handle both dict (unlikely but possible) and number (common case)
+        if isinstance(duration, dict):
+            total_seconds = duration.get('totalSeconds')
+            if total_seconds and isinstance(total_seconds, (int, float)) and total_seconds > 0:
+                return (int(total_seconds), "duration.totalSeconds")
+        elif isinstance(duration, (int, float)) and duration > 0:
+            return (int(duration), "duration")
+    
+    # Priority 2: Check elapsedDuration (also a float number)
+    elapsed = activity.get('elapsedDuration')
+    if elapsed is not None and isinstance(elapsed, (int, float)) and elapsed > 0:
+        return (int(elapsed), "elapsedDuration")
+    
+    # Priority 3: Check elapsedDurationInSeconds (alternative field name)
+    elapsed_sec = activity.get('elapsedDurationInSeconds')
+    if elapsed_sec is not None and isinstance(elapsed_sec, (int, float)) and elapsed_sec > 0:
+        return (int(elapsed_sec), "elapsedDurationInSeconds")
+    
+    # Priority 4: Fall back to details object if available
+    if details:
+        # Check details.duration (should also be a number, but handle dict case)
+        details_duration = details.get('duration')
+        if details_duration is not None:
+            if isinstance(details_duration, dict):
+                total_seconds = details_duration.get('totalSeconds')
+                if total_seconds and isinstance(total_seconds, (int, float)) and total_seconds > 0:
+                    return (int(total_seconds), "details.duration.totalSeconds")
+            elif isinstance(details_duration, (int, float)) and details_duration > 0:
+                return (int(details_duration), "details.duration")
+        
+        # Check details.elapsedDuration
+        details_elapsed = details.get('elapsedDuration')
+        if details_elapsed is not None and isinstance(details_elapsed, (int, float)) and details_elapsed > 0:
+            return (int(details_elapsed), "details.elapsedDuration")
+        
+        # Check details.elapsedDurationInSeconds
+        details_elapsed_sec = details.get('elapsedDurationInSeconds')
+        if details_elapsed_sec is not None and isinstance(details_elapsed_sec, (int, float)) and details_elapsed_sec > 0:
+            return (int(details_elapsed_sec), "details.elapsedDurationInSeconds")
+        
+        # Check details.summaryDTO (nested structure)
+        summary_dto = details.get('summaryDTO')
+        if summary_dto and isinstance(summary_dto, dict):
+            summary_elapsed = summary_dto.get('elapsedDuration')
+            if summary_elapsed is not None and isinstance(summary_elapsed, (int, float)) and summary_elapsed > 0:
+                return (int(summary_elapsed), "details.summaryDTO.elapsedDuration")
+            
+            summary_duration = summary_dto.get('duration')
+            if summary_duration is not None and isinstance(summary_duration, (int, float)) and summary_duration > 0:
+                return (int(summary_duration), "details.summaryDTO.duration")
+    
+    return (0, "none")
+
+
 def sync_activities_by_date_range(start_date: str, end_date: str) -> dict:
     """
     Sync Garmin activities for a date range using MCP client with token persistence.
@@ -105,16 +181,13 @@ def sync_activities_by_date_range(start_date: str, end_date: str) -> dict:
                 activity_type_obj = activity.get('activityType', {})
                 activity_type_key = activity_type_obj.get('typeKey', 'running') if isinstance(activity_type_obj, dict) else 'running'
                 
-                # Extract duration
-                duration_obj = activity.get('duration', {})
-                duration_seconds = duration_obj.get('totalSeconds', 0) if isinstance(duration_obj, dict) else 0
-                
                 # Fetch full activity details (needed for session stream)
                 # Add small delay to avoid rate limiting
                 if i > 0:
                     import time
                     time.sleep(2)  # 2 second delay between detail fetches
                 
+                details = None
                 try:
                     # Use get_activity() method to get full details
                     details = client.safe_call('get_activity', activity_id)
@@ -122,6 +195,22 @@ def sync_activities_by_date_range(start_date: str, end_date: str) -> dict:
                     # If details fetch fails, still include basic info
                     logger.warning(f"Failed to fetch details for activity {activity_id}: {detail_err}")
                     details = None
+                
+                # Extract duration with fallback to details
+                duration_seconds, duration_source = extract_duration(activity, details)
+                
+                # Log duration extraction for debugging
+                if duration_seconds > 0:
+                    logger.info(f"Activity {activity_id}: Extracted duration {duration_seconds}s from {duration_source}")
+                else:
+                    logger.warning(f"Activity {activity_id}: No valid duration found after checking all sources")
+                    logger.debug(f"  Activity duration field: {activity.get('duration')}")
+                    logger.debug(f"  Activity elapsedDuration: {activity.get('elapsedDuration')}")
+                    logger.debug(f"  Activity elapsedDurationInSeconds: {activity.get('elapsedDurationInSeconds')}")
+                    if details:
+                        logger.debug(f"  Details duration: {details.get('duration')}")
+                        logger.debug(f"  Details elapsedDuration: {details.get('elapsedDuration')}")
+                        logger.debug(f"  Details summaryDTO: {details.get('summaryDTO')}")
                 
                 formatted_activities.append({
                     'activityId': activity_id,

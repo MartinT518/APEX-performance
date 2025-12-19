@@ -84,10 +84,11 @@ export async function persistStrengthSession(
 }
 
 /**
- * Persists fueling log to Supabase
+ * Persists fueling log to Supabase (including GI distress)
  */
 export async function persistFuelingLog(
   carbsPerHour: number,
+  giDistress: number,
   date: string
 ): Promise<PersistenceResult> {
   try {
@@ -105,6 +106,7 @@ export async function persistFuelingLog(
         date,
         fueling_logged: true,
         fueling_carbs_per_hour: carbsPerHour,
+        fueling_gi_distress: giDistress,
       }, {
         onConflict: 'user_id,date',
       });

@@ -1,0 +1,121 @@
+{
+  "version": "1.0",
+  "description": "Deterministic Substitution Matrix - Maps (VetoType, Phase) -> SpecificWorkout",
+  "rules": {
+    "structural_RED": {
+      "BASE_PHASE": {
+        "action": "SUBSTITUTE",
+        "protocol": "60min Cycling @ Z2 HR (Match Duration)",
+        "overrideWorkout": {
+          "type": "BIKE",
+          "primaryZone": "Z2_ENDURANCE",
+          "matchDuration": true
+        }
+      },
+      "POWER_PHASE": {
+        "action": "SUBSTITUTE",
+        "protocol": "Bike Intervals (Match HR Duration) OR BFR",
+        "overrideWorkout": {
+          "type": "BIKE",
+          "primaryZone": "Z4_THRESHOLD",
+          "matchDuration": true
+        }
+      },
+      "SHARPENING_PHASE": {
+        "action": "SUBSTITUTE",
+        "protocol": "Bike Intervals (Match HR Duration) OR BFR",
+        "overrideWorkout": {
+          "type": "BIKE",
+          "primaryZone": "Z4_THRESHOLD",
+          "matchDuration": true
+        }
+      },
+      "TAPER_PHASE": {
+        "action": "SUBSTITUTE",
+        "protocol": "60min Cycling @ Z2 HR (Match Duration)",
+        "overrideWorkout": {
+          "type": "BIKE",
+          "primaryZone": "Z2_ENDURANCE",
+          "matchDuration": true
+        }
+      }
+    },
+    "metabolic_RED": {
+      "BASE_PHASE": {
+        "action": "DOWNGRADE",
+        "protocol": "Zone 1 Recovery",
+        "overrideWorkout": {
+          "primaryZone": "Z1_RECOVERY"
+        }
+      },
+      "POWER_PHASE": {
+        "action": "DOWNGRADE",
+        "protocol": "Zone 1 Recovery",
+        "overrideWorkout": {
+          "primaryZone": "Z1_RECOVERY"
+        }
+      },
+      "SHARPENING_PHASE": {
+        "action": "DOWNGRADE",
+        "protocol": "Zone 1 Recovery",
+        "overrideWorkout": {
+          "primaryZone": "Z1_RECOVERY"
+        }
+      },
+      "TAPER_PHASE": {
+        "action": "DOWNGRADE",
+        "protocol": "Zone 1 Recovery",
+        "overrideWorkout": {
+          "primaryZone": "Z1_RECOVERY"
+        }
+      }
+    },
+    "fueling_RED": {
+      "BASE_PHASE": {
+        "action": "CAP_DURATION",
+        "protocol": "Cap duration at 120min",
+        "overrideWorkout": {
+          "maxDurationMinutes": 120
+        }
+      },
+      "POWER_PHASE": {
+        "action": "CAP_DURATION",
+        "protocol": "Cap duration at 120min",
+        "overrideWorkout": {
+          "maxDurationMinutes": 120
+        }
+      },
+      "SHARPENING_PHASE": {
+        "action": "CAP_DURATION",
+        "protocol": "Cap duration at 120min",
+        "overrideWorkout": {
+          "maxDurationMinutes": 120
+        }
+      },
+      "TAPER_PHASE": {
+        "action": "CAP_DURATION",
+        "protocol": "Cap duration at 120min",
+        "overrideWorkout": {
+          "maxDurationMinutes": 120
+        }
+      }
+    },
+    "structural_RED_metabolic_RED": {
+      "action": "SHUTDOWN",
+      "protocol": "Complete Rest + Mobility"
+    },
+    "structural_RED_fueling_RED": {
+      "action": "SHUTDOWN",
+      "protocol": "Complete Rest + Mobility"
+    },
+    "metabolic_RED_fueling_RED": {
+      "action": "SHUTDOWN",
+      "protocol": "Complete Rest + Mobility"
+    },
+    "structural_RED_metabolic_RED_fueling_RED": {
+      "action": "SHUTDOWN",
+      "protocol": "Complete Rest + Mobility"
+    }
+  }
+}
+

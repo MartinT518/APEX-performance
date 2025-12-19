@@ -1,19 +1,20 @@
-import { useMonitorStore } from '../../monitor/monitorStore';
 import { usePhenotypeStore } from '../../monitor/phenotypeStore';
-import { useAnalyzeStore } from '../../analyze/analyzeStore';
 import { evaluateStructuralHealth } from '../../execute/agents/structuralAgent';
 import { evaluateMetabolicState } from '../../execute/agents/metabolicAgent';
 import { evaluateFuelingStatus } from '../../execute/agents/fuelingAgent';
-import { synthesizeCoachDecision } from '../../review/logic/substitutionMatrix';
-import { calculateAerobicDecoupling, calculateTimeInRedZone } from '../../kill/logic/decoupling';
+import { executeCoachVeto } from '../../review/logic/coachVetoEngine';
 import { getCurrentPhase, applyIntensityVeto } from '../../analyze/blueprintEngine';
+import { buildSessionSummary } from './sessionSummaryBuilder';
+import { persistCoachAuditLog } from '../../review/logic/auditLogPersistence';
 import type { IWorkout, ISubstitutionResult, IntensityZone } from '@/types/workout';
-import type { IAgentVote } from '@/types/agents';
+import type { IAgentVote, SessionIntegrity } from '@/types/agents';
 import type { ISessionDataPoint } from '@/types/session';
+import type { PrototypeSessionDetail } from '@/types/prototype';
 import { logger } from '@/lib/logger';
 
 export interface DecisionResult extends ISubstitutionResult {
   votes: IAgentVote[];
+  integrity?: SessionIntegrity; // Data integrity result for audit trail
 }
 
 export interface MetabolicData {
@@ -21,83 +22,86 @@ export interface MetabolicData {
   hrvBaseline?: number;
   currentHRV?: number;
   planLimitRedZone?: number;
+  sessionHistory?: PrototypeSessionDetail[]; // For fueling agent rolling history
 }
 
 /**
  * Generates coach decision: evaluates agents and synthesizes final decision
+ * 
+ * CRITICAL: Data integrity must be checked BEFORE agents execute.
+ * If integrity is REJECTED, agents never run and session is not persisted.
  */
 export async function generateDecision(
   todaysWorkout: IWorkout,
-  metabolicData?: MetabolicData
+  metabolicData?: MetabolicData,
+  integrity?: SessionIntegrity
 ): Promise<DecisionResult> {
   logger.info(">> Step 5: Agent Evaluation");
   
-  const monitor = useMonitorStore.getState();
   const profile = usePhenotypeStore.getState().profile;
-  const analyzeStore = useAnalyzeStore.getState();
   if (!profile) throw new Error("Profile missing");
 
-  const votes: IAgentVote[] = [];
+  // CRITICAL: Check data integrity BEFORE calling any micro-agents
+  if (integrity) {
+    logger.info(`Data Integrity Status: ${integrity.status} (confidence: ${(integrity.confidence * 100).toFixed(1)}%)`);
+    
+    if (integrity.status === 'REJECTED') {
+      // REJECTED status blocks agent execution - return early with error
+      logger.error(`Data Integrity REJECTED: ${integrity.reason || 'Critical data integrity failure'}`);
+      throw new Error(`Data Integrity REJECTED: ${integrity.reason || 'Cannot proceed with agent evaluation due to data integrity failure'}`);
+    }
+    
+    if (integrity.status === 'SUSPECT') {
+      // SUSPECT status: agents can run but with reduced confidence
+      logger.warn(`Data Integrity SUSPECT: Agents will run with reduced confidence (${(integrity.confidence * 100).toFixed(1)}%)`);
+    }
+  }
 
   // Get current phase for constraints
   const currentDate = new Date();
   const phase = getCurrentPhase(currentDate);
   logger.info(`Current Phase: ${phase.name} (Phase ${phase.phaseNumber}), Max Zone: ${phase.maxAllowedZone}`);
 
-  // Agent A: Structural - Load tonnage tier and weekly volume
-  const daysSinceLift = monitor.getDaysSinceLastLift();
-  const lastLiftTier = await monitor.getLastLiftTier();
-  const currentWeeklyVolume = await monitor.calculateCurrentWeeklyVolume();
-  
-  votes.push(evaluateStructuralHealth({
-    niggleScore: monitor.todayEntries.niggleScore || 0,
-    daysSinceLastLift: daysSinceLift,
-    tonnageTier: lastLiftTier,
-    currentWeeklyVolume
-  }));
+  // Build session summary once - each agent receives only its slice
+  logger.info(">> Building Session Summary for independent agent evaluation");
+  const sessionSummary = await buildSessionSummary({
+    sessionPoints: metabolicData?.sessionPoints || [],
+    workout: todaysWorkout,
+    metabolicData: {
+      hrvBaseline: metabolicData?.hrvBaseline,
+      currentHRV: metabolicData?.currentHRV,
+      planLimitRedZone: metabolicData?.planLimitRedZone || 10
+    },
+    sessionHistory: metabolicData?.sessionHistory
+  });
 
-  // Agent B: Metabolic - Use real data from session if available
-  let aerobicDecoupling = 0;
-  let timeInRedZone = 0;
-  const planLimitRedZone = metabolicData?.planLimitRedZone || 10;
+  // Call each agent independently with its slice - no shared state or calculations
+  logger.info(">> Calling agents independently (no shared state)");
   
-  if (metabolicData?.sessionPoints && metabolicData.sessionPoints.length > 0) {
-    // Calculate decoupling from real session data
-    aerobicDecoupling = calculateAerobicDecoupling(metabolicData.sessionPoints);
-    
-    // Calculate time in red zone (using anaerobic floor HR as threshold)
-    const thresholdHR = profile.config.anaerobic_floor_hr || 170;
-    timeInRedZone = calculateTimeInRedZone(metabolicData.sessionPoints, thresholdHR);
-    
-    logger.info(`Metabolic metrics: Decoupling=${aerobicDecoupling.toFixed(1)}%, RedZone=${timeInRedZone.toFixed(1)}min`);
-  } else {
-    // Fallback to defaults if no session data
-    aerobicDecoupling = 3.0;
-    timeInRedZone = 5;
-    logger.info("Using default metabolic values (no session data available)");
-  }
+  // Agent A: Structural - receives only structural slice
+  const structuralVote = await evaluateStructuralHealth(sessionSummary.structural);
+  logger.info(`Structural Agent: ${structuralVote.vote} (score: ${structuralVote.score || 'N/A'})`);
   
-  votes.push(evaluateMetabolicState({
-    aerobicDecoupling,
-    timeInRedZone,
-    planLimitRedZone,
-    hrvBaseline: metabolicData?.hrvBaseline,
-    currentHRV: metabolicData?.currentHRV
-  }));
+  // Agent B: Metabolic - receives only metabolic slice, computes its own metrics
+  const metabolicVote = evaluateMetabolicState(sessionSummary.metabolic);
+  logger.info(`Metabolic Agent: ${metabolicVote.vote} (score: ${metabolicVote.score || 'N/A'})`);
+  
+  // Agent C: Fueling - receives only fueling slice, computes Gut_Training_Index from history
+  const fuelingVote = evaluateFuelingStatus(sessionSummary.fueling);
+  logger.info(`Fueling Agent: ${fuelingVote.vote} (score: ${fuelingVote.score || 'N/A'})`);
 
-  // Agent C: Fueling - Use real gut training index from baselines
-  const gutTrainingIndex = analyzeStore.baselines.gutTrainingIndex || 0;
-  logger.info(`Gut Training Index: ${gutTrainingIndex} (from baselines)`);
-  
-  votes.push(evaluateFuelingStatus({
-    gutTrainingIndex, // Use real value instead of hardcoded 2
-    nextRunDuration: todaysWorkout.durationMinutes
-  }));
+  const votes: IAgentVote[] = [structuralVote, metabolicVote, fuelingVote];
 
   logger.info("Agent Votes:", votes.map(v => `${v.agentId}=${v.vote}`));
 
-  logger.info(">> Step 6: The Coach Synthesis");
-  let decision = synthesizeCoachDecision(votes, todaysWorkout);
+  logger.info(">> Step 6: The Coach Synthesis (Deterministic Veto Engine)");
+  // Use deterministic Coach Veto Engine instead of weighted synthesis
+  let decision = executeCoachVeto(
+    votes,
+    todaysWorkout,
+    phase,
+    integrity?.status
+  );
   
   // Step 4 (REVISED): Phase-Aware Synthesis - Apply intensity veto
   const agentSuggestedZone = decision.finalWorkout.primaryZone;
@@ -139,11 +143,24 @@ export async function generateDecision(
   if (decision.modifications.length > 0) {
     logger.info(`Modifications: ${decision.modifications.join(', ')}`);
   }
-  
+
+  // Persist audit log (best effort - don't block decision)
+  try {
+    await persistCoachAuditLog({
+      sessionId: undefined, // Will be set when session is persisted
+      votes,
+      decision,
+      dataIntegrityStatus: integrity?.status
+    });
+  } catch (err) {
+    logger.warn('Failed to persist audit log (non-blocking)', err);
+  }
+
   // Return decision with votes attached for UI display
   return {
     ...decision,
-    votes
+    votes,
+    integrity // Include integrity result for audit trail
   };
 }
 

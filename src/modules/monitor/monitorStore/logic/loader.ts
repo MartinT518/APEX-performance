@@ -65,7 +65,7 @@ export async function loadTodayMonitoringFromSupabase(
       } : null,
       fuelingLog: data.fueling_logged && data.fueling_carbs_per_hour !== null ? {
         carbsPerHour: data.fueling_carbs_per_hour,
-        giDistress: 0, // Not stored in DB, default to 0
+        giDistress: data.fueling_gi_distress ?? 0,
       } : null,
       lastAuditTime: data.updated_at ? new Date(data.updated_at).getTime() : null,
     };

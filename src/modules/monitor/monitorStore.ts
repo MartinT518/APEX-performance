@@ -97,8 +97,8 @@ export const useMonitorStore = create<MonitorState>()(
           },
         }));
 
-        // Persist to Supabase
-        const result = await persistFuelingLog(carbsPerHour, today);
+        // Persist to Supabase (including GI distress)
+        const result = await persistFuelingLog(carbsPerHour, giDistress, today);
         if (!result.success) {
           throw new Error(result.error || 'Failed to save fueling log');
         }

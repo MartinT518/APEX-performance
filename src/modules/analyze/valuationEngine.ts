@@ -65,9 +65,12 @@ function getEffectiveVolume(session: PrototypeSessionDetail): number {
  * Equation A: Smart Adherence Score
  * Formula: Sum(V_eff * I_comp) / Sum(V_plan)
  * 
+ * CRITICAL Logic: If user executes a Substitution triggered by a valid Structural Veto,
+ * count it as 100% Adherence, not 0%. This rewards smart training (substituting when chassis is compromised).
+ * 
  * Logic:
- * - If session was substituted (type === 'SUB') due to valid Structural Veto,
- *   count as 100% adherence (or 0.8 factor), NOT a failure
+ * - Valid substitutions (type === 'SUB' with Structural RED) = 1.0 compliance (100% adherence)
+ * - Invalid substitutions = 0.5 compliance
  * - If skipped without Veto, count as 0
  */
 function calculateSmartAdherenceScore(sessions: PrototypeSessionDetail[]): number {
@@ -86,10 +89,13 @@ function calculateSmartAdherenceScore(sessions: PrototypeSessionDetail[]): numbe
     } else if (session.type === 'SUB') {
       // Substituted - check if it was due to valid Structural Veto
       const hasValidVeto = session.agentFeedback?.structural?.includes('RED') || 
-                          session.agentFeedback?.structural?.includes('RED');
+                          session.agentFeedback?.structural?.toUpperCase().includes('RED') ||
+                          session.compliance === 'SUBSTITUTED';
+      
       if (hasValidVeto) {
-        // Valid substitution counts as 0.8 adherence (80%)
-        intensityCompliance = 0.8;
+        // CRITICAL: Valid substitution counts as 100% adherence (1.0 compliance)
+        // This rewards smart training decisions
+        intensityCompliance = 1.0;
       } else {
         // Invalid substitution counts as 0.5
         intensityCompliance = 0.5;
@@ -118,8 +124,12 @@ function calculateSmartAdherenceScore(sessions: PrototypeSessionDetail[]): numbe
  * Formula: RollingAvg(Strength_Load) / RollingAvg(Run_Volume)
  * 
  * Goal: Detect if the "Chassis" (Strength) is supporting the "Engine" (Volume)
+ * 
+ * Implementation: Uses tonnageHistory and volumeHistory with unit normalization.
+ * Normalize units: (Tonnage/1000) / (Volume/10)
+ * Use rolling averages from last 30 days.
  */
-function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays: number = 14): number {
+function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays: number = 30): number {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - windowDays);
 
@@ -139,35 +149,45 @@ function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays:
     }
   });
 
-  let totalStrengthLoad = 0;
-  let totalRunVolume = 0;
-  let strengthCount = 0;
-  let runCount = 0;
-
+  // Collect tonnage history (strength sessions)
+  const tonnageHistory: number[] = [];
   recentSessions.forEach(session => {
     if (session.type === 'STR' || session.hiddenVariables?.strengthTier) {
       const load = strengthTierToLoad(session.hiddenVariables?.strengthTier);
-      totalStrengthLoad += load;
-      strengthCount++;
+      tonnageHistory.push(load);
     }
-    
+  });
+
+  // Collect volume history (running sessions)
+  const volumeHistory: number[] = [];
+  recentSessions.forEach(session => {
     if (session.type === 'EXEC' || session.type === 'SUB') {
       const volume = getEffectiveVolume(session);
       if (volume > 0) {
-        totalRunVolume += volume;
-        runCount++;
+        volumeHistory.push(volume);
       }
     }
   });
 
-  const avgStrengthLoad = strengthCount > 0 ? totalStrengthLoad / strengthCount : 0;
-  const avgRunVolume = runCount > 0 ? totalRunVolume / runCount : 0;
+  // Calculate rolling averages (last 30 days, or all available if less)
+  const tonnageAvg = tonnageHistory.length > 0
+    ? tonnageHistory.reduce((sum, t) => sum + t, 0) / tonnageHistory.length
+    : 0;
+  
+  const volumeAvg = volumeHistory.length > 0
+    ? volumeHistory.reduce((sum, v) => sum + v, 0) / volumeHistory.length
+    : 0;
 
-  if (avgRunVolume === 0) {
+  if (volumeAvg === 0) {
     return 0;
   }
 
-  return avgStrengthLoad / avgRunVolume;
+  // Normalize units: (Tonnage/1000) / (Volume/10)
+  // This prevents 10,000kg vs 100km from being a 100:1 ratio
+  const normalizedTonnage = tonnageAvg / 1000;
+  const normalizedVolume = volumeAvg / 10;
+
+  return normalizedVolume > 0 ? normalizedTonnage / normalizedVolume : 0;
 }
 
 /**

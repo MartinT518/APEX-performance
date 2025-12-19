@@ -1,14 +1,18 @@
 import { usePhenotypeStore } from '../../monitor/phenotypeStore';
 import { validateHighRevPhysiology } from '../../kill/logic/highRevFilter';
 import { detectCadenceLock } from '../../kill/logic/cadenceLock';
+import { detectDropouts, detectClipping } from '../../kill/logic/integrity';
 import { adaptGarminToSessionStream } from '../../monitor/ingestion/garminAdapter';
+import { evaluateDataIntegrity } from '../../kill/agents/dataIntegrityAgent';
 import type { GarminClient } from '../../monitor/ingestion/garminClient';
 import type { ISessionDataPoint, IFilterDiagnostics } from '@/types/session';
+import type { SessionIntegrity } from '@/types/agents';
 import { logger } from '@/lib/logger';
 
 export interface SessionProcessingResult {
   points: ISessionDataPoint[];
   diagnostics: IFilterDiagnostics;
+  integrity: SessionIntegrity; // Data Integrity Agent output
   cadenceLockDetected?: boolean;
   metadata?: {
     dataSource: 'GARMIN' | 'SIMULATION' | 'NONE';
@@ -84,16 +88,78 @@ export async function processSessionData(
   const profile = usePhenotypeStore.getState().profile;
   if (!profile) throw new Error("Profile not loaded");
 
-  const integrity = validateHighRevPhysiology(sessionPoints, profile);
-  logger.info(`Integrity Check: ${integrity.status} (${integrity.validPointCount}/${integrity.originalPointCount} valid)`);
+  // CRITICAL: Data Integrity Agent runs as middleware BEFORE DB insert
+  // This prevents bad data from being persisted and triggering false agent votes
+  logger.info(">> Data Integrity Agent: Validating session data integrity");
   
-  if (integrity.status === 'SUSPECT') {
-    throw new Error("Session Data Rejected: Signal Noise or Artifacts detected.");
+  const integrity = evaluateDataIntegrity({
+    sessionPoints,
+    phenotypeProfile: profile
+  });
+  
+  logger.info(`Data Integrity: ${integrity.status} (confidence: ${(integrity.confidence * 100).toFixed(1)}%)`);
+  if (integrity.flags.length > 0) {
+    logger.info(`Flags: ${integrity.flags.join(', ')}`);
+  }
+  
+  // If REJECTED, throw error and prevent session persistence
+  if (integrity.status === 'REJECTED') {
+    const errorMessage = `Data Integrity REJECTED: ${integrity.reason || 'Critical data integrity failure'}`;
+    logger.error(errorMessage);
+    throw new Error(errorMessage);
   }
 
-  // Check for cadence lock
-  const cadenceLockDiagnostics = detectCadenceLock(sessionPoints);
+  // Continue with existing filter chain for diagnostics (but integrity already checked)
+  // Integrity Filter Chain - Order is critical:
+  // 1. HighRevFilter (phenotype-aware) - FIRST
+  // 2. Dropouts detection
+  // 3. Clipping detection
+  // 4. Cadence lock (with phenotype awareness)
+  
+  const highRevDiagnostics = validateHighRevPhysiology(sessionPoints, profile);
+  logger.info(`HighRev Filter: ${highRevDiagnostics.status} (${highRevDiagnostics.validPointCount}/${highRevDiagnostics.originalPointCount} valid)`);
+  
+  // Collect all flagged indices from all checks
+  const allFlaggedIndices = new Set<number>(highRevDiagnostics.flaggedIndices);
+  
+  // 2. Dropouts detection (after HighRevFilter)
+  const dropoutDiagnostics = detectDropouts(sessionPoints);
+  logger.info(`Dropout Check: ${dropoutDiagnostics.status} (${dropoutDiagnostics.flaggedIndices.length} points flagged)`);
+  dropoutDiagnostics.flaggedIndices.forEach(idx => allFlaggedIndices.add(idx));
+  
+  // 3. Clipping detection
+  const clippingDiagnostics = detectClipping(sessionPoints);
+  logger.info(`Clipping Check: ${clippingDiagnostics.status} (${clippingDiagnostics.flaggedIndices.length} points flagged)`);
+  clippingDiagnostics.flaggedIndices.forEach(idx => allFlaggedIndices.add(idx));
+  
+  // 4. Cadence lock (with phenotype awareness)
+  const cadenceLockDiagnostics = detectCadenceLock(sessionPoints, profile);
   const cadenceLockDetected = cadenceLockDiagnostics.flaggedIndices.length > 0;
+  logger.info(`Cadence Lock Check: ${cadenceLockDiagnostics.status} (${cadenceLockDiagnostics.flaggedIndices.length} points flagged)`);
+  cadenceLockDiagnostics.flaggedIndices.forEach(idx => allFlaggedIndices.add(idx));
+  
+  // Merge all diagnostics into final result
+  const finalFlaggedIndices = Array.from(allFlaggedIndices).sort((a, b) => a - b);
+  const validPointCount = sessionPoints.length - finalFlaggedIndices.length;
+  
+  // Determine overall status: reject if > 20% of data is flagged
+  const flaggedRatio = finalFlaggedIndices.length / sessionPoints.length;
+  const overallStatus: IFilterDiagnostics['status'] = flaggedRatio > 0.2 ? 'SUSPECT' : 'VALID';
+  
+  // Collect all reasons
+  const reasons: string[] = [];
+  if (highRevDiagnostics.reason) reasons.push(highRevDiagnostics.reason);
+  if (dropoutDiagnostics.reason) reasons.push(dropoutDiagnostics.reason);
+  if (clippingDiagnostics.reason) reasons.push(clippingDiagnostics.reason);
+  if (cadenceLockDiagnostics.reason) reasons.push(cadenceLockDiagnostics.reason);
+  
+  const finalDiagnostics: IFilterDiagnostics = {
+    status: overallStatus,
+    reason: reasons.length > 0 ? reasons.join('; ') : undefined,
+    flaggedIndices: finalFlaggedIndices,
+    originalPointCount: sessionPoints.length,
+    validPointCount
+  };
   
   if (cadenceLockDetected) {
     logger.warn(`Cadence Lock detected: ${cadenceLockDiagnostics.flaggedIndices.length} points flagged`);
@@ -106,10 +172,11 @@ export async function processSessionData(
     activityName, 
     timestamp: new Date().toISOString()
   };
-  
+
   return { 
     points: sessionPoints,
-    diagnostics: integrity,
+    diagnostics: finalDiagnostics,
+    integrity, // Include integrity result for decision flow
     cadenceLockDetected,
     metadata
   };

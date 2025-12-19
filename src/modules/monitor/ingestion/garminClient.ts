@@ -28,7 +28,7 @@ export class GarminClient {
   private async callWithRetry<T>(fn: () => Promise<T>, methodName: string, attempt = 1): Promise<T> {
     try {
       return await fn();
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if ((errorMessage.includes('429') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) && attempt < this.maxRetries) {
         const currentDelay = this.baseDelayMs * Math.pow(2, attempt - 1);

@@ -56,6 +56,12 @@ export interface IPhenotypeProfile {
    */
   is_high_rev: boolean;
   
+  /**
+   * User's age in years. Used to calculate age-predicted max HR (220 - age).
+   * If not provided, defaults to standard physiological ceiling.
+   */
+  age?: number;
+  
   config: IPhenotypeConfig;
   
   created_at?: string;

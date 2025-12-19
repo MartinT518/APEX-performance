@@ -11,6 +11,7 @@ import type { DecisionResult } from './dailyCoach/logic/decision';
 import type { AnalysisResult } from './dailyCoach/logic/analysis';
 import type { SessionProcessingResult } from './dailyCoach/logic/sessionProcessor';
 import type { AuditStatus } from './dailyCoach/logic/audit';
+import type { SessionIntegrity } from '@/types/agents';
 
 /**
  * THE DAILY COACH (Process Orchestrator)
@@ -28,8 +29,9 @@ export class DailyCoach {
   }
 
   // Step 2: Active User Ingestion
-  static async performDailyAudit(lastRunDuration: number): Promise<AuditStatus> {
-    return performDailyAudit(lastRunDuration, this.garminClient);
+  // NOTE: This method signature is deprecated. Use performDailyAudit directly with AuditGatingInput.
+  static async performDailyAudit(auditInputs: import('./dailyCoach/logic/audit').AuditGatingInput): Promise<AuditStatus> {
+    return performDailyAudit(auditInputs, this.garminClient);
   }
 
   // Step 3: Raw Data Processing (The "Kill" Module)
@@ -45,8 +47,9 @@ export class DailyCoach {
   // Step 5 & 6: Agent Evaluation & Coach Synthesis
   static async generateDecision(
     todaysWorkout: IWorkout,
-    metabolicData?: { sessionPoints?: ISessionDataPoint[]; hrvBaseline?: number; currentHRV?: number; planLimitRedZone?: number }
+    metabolicData?: { sessionPoints?: ISessionDataPoint[]; hrvBaseline?: number; currentHRV?: number; planLimitRedZone?: number },
+    integrity?: SessionIntegrity
   ): Promise<DecisionResult> {
-    return generateDecision(todaysWorkout, metabolicData);
+    return generateDecision(todaysWorkout, metabolicData, integrity);
   }
 }

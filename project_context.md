@@ -25,6 +25,7 @@
 * **Modules:**
     * **M (Monitor):** Active Ingestion (Strength, Gut, Pain).
     * **K (Kill):** Data Integrity & Signal Processing (High-Rev Filter).
+    * **A (Analyze):** Context & Forecasting (Baseline Engine, Blueprint Engine, Valuation Engine).
     * **E (Execute):** Micro-Agents (Structural, Metabolic, Fueling).
     * **R (Review):** Coach Logic & Substitution (Deterministic Plan Rewriting).
 * **Key Logic:**

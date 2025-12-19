@@ -8,11 +8,16 @@ import { logger } from "@/lib/logger";
 import { persistSessionLog, sessionResultToLogData } from "@/modules/dailyCoach/logic/persistence";
 import { persistAgentVotes } from "@/modules/dailyCoach/logic/votePersistence";
 import type { SessionProcessingResult } from "@/modules/dailyCoach/logic/sessionProcessor";
-import { usePhenotypeStore } from "@/modules/monitor/phenotypeStore";
-import { useMonitorStore } from "@/modules/monitor/monitorStore";
 import { syncGarminSessionsToDatabase } from "@/modules/monitor/ingestion/garminSync";
 import { syncGarminSessionsToDatabaseMCP } from "@/modules/monitor/ingestion/garminSyncMCP";
 import { GarminClient } from "@/modules/monitor/ingestion/garminClient";
+import { performDailyAudit } from "@/modules/dailyCoach/logic/audit";
+import { loadDailySnapshot, persistDailySnapshot } from "@/modules/dailyCoach/logic/snapshotPersistence";
+import { buildDailySnapshot } from "@/modules/dailyCoach/logic/snapshotBuilder";
+import { resolveDailyStatus } from "@/modules/review/logic/statusResolver";
+import { mapRowToProfile } from "@/modules/monitor/phenotypeStore/logic/profileMapper";
+import { DEFAULT_CONFIG } from "@/modules/monitor/phenotypeStore/logic/constants";
+import type { IPhenotypeProfile } from "@/types/phenotype";
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -22,31 +27,133 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 export async function runCoachAnalysis() {
   logger.info("SERVER ACTION: runCoachAnalysis triggered");
   try {
-    // 0. Check if profile exists
-    let currentProfile = usePhenotypeStore.getState().profile;
-    if (!currentProfile) {
-      // Try to load profile
-      const phenotypeStore = usePhenotypeStore.getState();
-      await phenotypeStore.loadProfile();
-      currentProfile = usePhenotypeStore.getState().profile;
-      if (!currentProfile) {
-        return { success: false, message: "Profile not configured. Please complete settings first." };
+    const supabase = createServerClient();
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session?.session?.user?.id;
+    
+    if (!userId) {
+      return { success: false, message: "Not authenticated. Please log in." };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // 0. Load profile from DB (no zustand)
+    const { data: profileRow, error: profileError } = await supabase
+      .from('phenotype_profiles')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (profileError) {
+      logger.error('Failed to load profile', profileError);
+      return { success: false, message: "Failed to load profile." };
+    }
+
+    if (!profileRow) {
+      return { success: false, message: "Profile not configured. Please complete settings first." };
+    }
+
+    const currentProfile: IPhenotypeProfile = mapRowToProfile(profileRow);
+
+    // 1. Load daily monitoring from DB
+    const { data: dailyMonitoring, error: monitoringError } = await supabase
+      .from('daily_monitoring')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .maybeSingle();
+
+    if (monitoringError) {
+      logger.error('Failed to load daily monitoring', monitoringError);
+    }
+
+    const niggleScore = dailyMonitoring?.niggle_score ?? null;
+    const strengthTier = dailyMonitoring?.strength_tier ?? null;
+    const fuelingCarbsPerHour = dailyMonitoring?.fueling_carbs_per_hour ?? null;
+    const fuelingGiDistress = dailyMonitoring?.fueling_gi_distress ?? null;
+
+    // 2. Check snapshot cache first
+    const snapshotResult = await loadDailySnapshot({ userId, date: today });
+    if (snapshotResult.success && snapshotResult.snapshot) {
+      const snapshot = snapshotResult.snapshot;
+      // Check if inputs have changed (compare inputs_summary)
+      const inputsMatch = snapshot.inputs_summary_jsonb && 
+        snapshot.inputs_summary_jsonb.niggleScore === niggleScore &&
+        snapshot.inputs_summary_jsonb.strengthTier === strengthTier &&
+        snapshot.inputs_summary_jsonb.fuelingCarbsPerHour === fuelingCarbsPerHour &&
+        snapshot.inputs_summary_jsonb.fuelingGiDistress === fuelingGiDistress;
+      
+      if (inputsMatch) {
+        logger.info("Using cached snapshot");
+        // Return cached result
+        const statusResult = resolveDailyStatus({
+          votes: snapshot.votes_jsonb,
+          niggleScore: niggleScore ?? 0
+        });
+        
+        return {
+          success: true,
+          decision: {
+            action: snapshot.final_workout_jsonb.isAdapted ? 'MODIFIED' : 'EXECUTED_AS_PLANNED',
+            originalWorkout: snapshot.final_workout_jsonb,
+            finalWorkout: snapshot.final_workout_jsonb,
+            reasoning: snapshot.reason,
+            modifications: [],
+            votes: snapshot.votes_jsonb,
+            global_status: statusResult.global_status,
+            reason: statusResult.reason,
+            votes_display: statusResult.votes,
+            substitutions_suggested: statusResult.substitutions_suggested
+          },
+          simulation: {
+            successProbability: snapshot.certainty_score ?? 0,
+            confidenceScore: 'MEDIUM' as const
+          },
+          auditStatus: 'NOMINAL',
+          metadata: { dataSource: 'CACHE' }
+        };
       }
     }
 
-    // 1. Initialize Coach (Loads Profile & Garmin)
-    await DailyCoach.initialize();
+    // 3. Get last run duration for audit check
+    const { data: lastSession } = await supabase
+      .from('session_logs')
+      .select('duration_minutes')
+      .eq('user_id', userId)
+      .eq('sport_type', 'RUNNING')
+      .order('session_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    // 2. Perform Audit
-    // We pass -1 or a dummy value because we want DailyCoach to fetch real data
-    const auditStatus = await DailyCoach.performDailyAudit(0); 
-    
-    if (auditStatus === 'AUDIT_PENDING') {
-      return { success: false, message: "Audit Required: Please complete daily logs." };
+    const lastRunDuration = lastSession?.duration_minutes ?? 0;
+
+    // 4. Perform Audit (using new audit gating)
+    const auditInputs = {
+      niggleScore,
+      strengthTier,
+      lastRunDuration,
+      fuelingTarget: null, // Will be determined from workout
+      fuelingCarbsPerHour,
+      fuelingGiDistress
+    };
+
+    // Initialize Garmin client for audit (if available)
+    let garminClient: GarminClient | null = null;
+    try {
+      await DailyCoach.initialize();
+      // Garmin client is stored in DailyCoach, but we need it for audit
+      // For now, pass null - audit will use lastRunDuration from DB
+    } catch (e) {
+      logger.warn("Failed to initialize Garmin client", e);
     }
 
-    // 3. Process Session (Fetch latest Garmin automatically if available)
-    // Passing empty array triggers automatic Garmin fetch when client is available
+    const auditStatus = await performDailyAudit(auditInputs, garminClient);
+    
+    if (auditStatus === 'AUDIT_PENDING') {
+      return { success: false, message: "Audit Required: Please complete daily logs.", auditStatus };
+    }
+
+    // 5. Process Session (Fetch latest Garmin automatically if available)
     let processingResult: SessionProcessingResult | null = null;
     let sessionMetadata: { dataSource: string; activityName?: string; timestamp?: string } = { 
         dataSource: 'NONE', 
@@ -76,65 +183,54 @@ export async function runCoachAnalysis() {
         logger.warn("Process Session warning:", e);
     }
 
-    // 4. Run Analysis (Use real baseline data if available)
-    // Get current baselines from database
-    const supabase = createServerClient();
-    const { data: session } = await supabase.auth.getSession();
-    const userId = session?.session?.user?.id;
-    
+    // 6. Run Analysis (Use real baseline data from DB)
     let currentHRV = 55; // Default fallback
     let currentTonnage = 12000; // Default fallback
     
-    if (userId) {
-      // Try to get latest baseline metrics
-      type BaselineMetrics = { hrv: number | null; tonnage: number | null };
-      const result = await supabase
-        .from('baseline_metrics')
-        .select('hrv, tonnage')
-        .eq('user_id', userId)
-        .order('date', { ascending: false })
-        .limit(1)
-        .maybeSingle() as { data: BaselineMetrics | null; error: unknown };
-      
-      if (result.data) {
-        currentHRV = result.data.hrv ?? currentHRV;
-        currentTonnage = result.data.tonnage ? Number(result.data.tonnage) : currentTonnage;
-      }
+    const { data: baselineData } = await supabase
+      .from('baseline_metrics')
+      .select('hrv, tonnage')
+      .eq('user_id', userId)
+      .order('date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (baselineData) {
+      currentHRV = baselineData.hrv ?? currentHRV;
+      currentTonnage = baselineData.tonnage ? Number(baselineData.tonnage) : currentTonnage;
     }
     
     const { simulation, baselines } = await DailyCoach.runAnalysis(currentHRV, currentTonnage);
 
-    // 5. Generate Decision
-    // Generate workout based on current phase (not hardcoded)
+    // 7. Generate Decision
     const { getCurrentPhase } = await import('@/modules/analyze/blueprintEngine');
     const phase = getCurrentPhase(new Date());
-    const workoutProfile = usePhenotypeStore.getState().profile;
-    const thresholdHR = workoutProfile?.config.threshold_hr_known || 175;
+    const thresholdHR = currentProfile.config.threshold_hr_known || 175;
     
-    // Use phase max zone as base (will be further constrained by agents)
     const baseZone = phase.maxAllowedZone;
     
-    // Check volume caps (Rule A-1)
-    const monitor = useMonitorStore.getState();
-    const currentWeeklyVolume = await monitor.calculateCurrentWeeklyVolume();
-    const currentMonthlyVolume = currentWeeklyVolume * 4.33; // Approximate
+    // Calculate weekly volume from DB (no zustand)
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - 7);
+    const { data: weeklySessions } = await supabase
+      .from('session_logs')
+      .select('duration_minutes')
+      .eq('user_id', userId)
+      .eq('sport_type', 'RUNNING')
+      .gte('session_date', weekStart.toISOString().split('T')[0]);
+    
+    const currentWeeklyVolume = weeklySessions?.reduce((sum, s) => sum + (s.duration_minutes ?? 0), 0) ?? 0;
+    const currentMonthlyVolume = currentWeeklyVolume * 4.33;
     
     if (currentMonthlyVolume > phase.maxMonthlyVolume) {
       logger.warn(`Volume cap exceeded: ${currentMonthlyVolume.toFixed(1)}km/month > ${phase.maxMonthlyVolume}km/month`);
     }
     
-    // Phase 3 special rule: Requires Structural_Integrity_Score > 80 for 160km/week
-    if (phase.phaseNumber === 3 && currentWeeklyVolume > phase.maxWeeklyVolume) {
-      // TODO: Calculate Structural Integrity Score (SIS)
-      // For now, log warning
-      logger.warn(`Phase 3 volume check: ${currentWeeklyVolume.toFixed(1)}km/week > ${phase.maxWeeklyVolume}km/week (requires SIS > 80)`);
-    }
-    
     const mockTodayWorkout: IWorkout = {
         id: 'w_today',
-        date: new Date().toISOString().split('T')[0],
+        date: today,
         type: 'RUN',
-        primaryZone: baseZone, // Use phase constraint instead of hardcoded Z4_THRESHOLD
+        primaryZone: baseZone,
         durationMinutes: 60,
         structure: { mainSet: baseZone === 'Z2_ENDURANCE' ? "Easy Base Build" : baseZone === 'Z4_THRESHOLD' ? "3x15min Threshold" : "Workout" },
         constraints: {
@@ -143,24 +239,30 @@ export async function runCoachAnalysis() {
             min: thresholdHR - 7, 
             max: thresholdHR + 7 
           },
-          fuelingTarget: 60 // Only shown if >90min
+          fuelingTarget: 60
         },
-        explanation: workoutProfile?.is_high_rev 
+        explanation: currentProfile.is_high_rev 
           ? phase.phaseNumber === 1 
             ? "Aerobic Base Phase: Building mitochondrial density through Zone 2 volume."
             : "Chassis and Engine are Green. Time to build lactate clearance."
           : "Threshold intervals to build aerobic capacity."
     };
 
-    // Pass real session data and HRV to decision generation
+    // Generate decision
     const decision = await DailyCoach.generateDecision(mockTodayWorkout, {
       sessionPoints: sessionPoints,
       hrvBaseline: baselines.hrvBaseline,
       currentHRV: currentHRV,
       planLimitRedZone: 10
+    }, processingResult?.integrity);
+
+    // 8. Resolve status from votes
+    const statusResult = resolveDailyStatus({
+      votes: decision.votes,
+      niggleScore: niggleScore ?? 0
     });
 
-    // Persist session log and agent votes (use already-processed result)
+    // 9. Persist session log and agent votes
     let sessionId: string | undefined;
     if (processingResult && (sessionPoints.length > 0 || sessionMetadata.dataSource !== 'NONE')) {
       try {
@@ -169,19 +271,44 @@ export async function runCoachAnalysis() {
         
         if (sessionResult.success && sessionResult.sessionId) {
           sessionId = sessionResult.sessionId;
-          
-          // Persist agent votes
           await persistAgentVotes(sessionId, decision.votes);
         }
       } catch (e) {
         logger.warn("Failed to persist session/votes:", e);
-        // Don't fail the whole analysis if persistence fails
       }
     }
 
+    // 10. Build and persist snapshot
+    const snapshot = buildDailySnapshot({
+      decision,
+      certaintyScore: simulation.successProbability,
+      certaintyDelta: null, // Will be calculated on next run
+      inputsSummary: {
+        niggleScore,
+        strengthTier,
+        lastRunDuration,
+        fuelingCarbsPerHour,
+        fuelingGiDistress
+      },
+      niggleScore: niggleScore ?? 0
+    });
+
+    await persistDailySnapshot({
+      userId,
+      date: today,
+      ...snapshot
+    });
+
+    // 11. Return result with status
     return { 
         success: true, 
-        decision: decision, // Already includes votes from dailyCoach
+        decision: {
+          ...decision,
+          global_status: statusResult.global_status,
+          reason: statusResult.reason,
+          votes_display: statusResult.votes,
+          substitutions_suggested: statusResult.substitutions_suggested
+        },
         simulation: {
             successProbability: simulation.successProbability,
             confidenceScore: simulation.confidenceScore,
@@ -195,6 +322,99 @@ export async function runCoachAnalysis() {
     logger.error("Coach Analysis Failed", error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     return { success: false, message: errorMessage };
+  }
+}
+
+/**
+ * Server action to apply substitution option (A/B/C) and rewrite plan in DB
+ */
+export async function applySubstitutionOption(
+  option: 'BIKE' | 'BFR' | 'REST'
+): Promise<{ success: boolean; workout?: IWorkout; message?: string }> {
+  try {
+    const supabase = createServerClient();
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session?.session?.user?.id;
+    
+    if (!userId) {
+      return { success: false, message: "Not authenticated." };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Load current snapshot
+    const snapshotResult = await loadDailySnapshot({ userId, date: today });
+    if (!snapshotResult.success || !snapshotResult.snapshot) {
+      return { success: false, message: "No daily decision found. Please run analysis first." };
+    }
+
+    const snapshot = snapshotResult.snapshot;
+    const originalWorkout = snapshot.final_workout_jsonb;
+
+    // Rewrite workout based on option
+    let rewrittenWorkout: IWorkout;
+    
+    if (option === 'BIKE') {
+      rewrittenWorkout = {
+        ...originalWorkout,
+        type: 'BIKE',
+        structure: {
+          ...originalWorkout.structure,
+          mainSet: '60min Indoor Cycling Intervals'
+        },
+        constraints: {
+          ...originalWorkout.constraints,
+          cadenceTarget: undefined, // Not applicable to bike
+        },
+        isAdapted: true,
+        explanation: 'Cycling intervals to match HR intensity. Zero impact on chassis.'
+      };
+    } else if (option === 'BFR') {
+      rewrittenWorkout = {
+        ...originalWorkout,
+        type: 'CROSS_TRAIN',
+        durationMinutes: 45,
+        structure: {
+          mainSet: '45min BFR Walk'
+        },
+        constraints: {
+          ...originalWorkout.constraints,
+          cadenceTarget: undefined,
+        },
+        isAdapted: true,
+        explanation: 'Blood Flow Restriction walking. Minimal impact, maintains metabolic stimulus.'
+      };
+    } else { // REST
+      rewrittenWorkout = {
+        ...originalWorkout,
+        type: 'REST',
+        durationMinutes: 0,
+        structure: {
+          mainSet: 'Complete Rest + Mobility'
+        },
+        constraints: undefined,
+        isAdapted: true,
+        explanation: 'System Shutdown: Complete rest required.'
+      };
+    }
+
+    // Update snapshot with rewritten workout
+    await persistDailySnapshot({
+      userId,
+      date: today,
+      global_status: snapshot.global_status,
+      reason: snapshot.reason,
+      votes: snapshot.votes_jsonb,
+      finalWorkout: rewrittenWorkout,
+      certaintyScore: snapshot.certainty_score,
+      certaintyDelta: snapshot.certainty_delta,
+      inputsSummary: snapshot.inputs_summary_jsonb
+    });
+
+    return { success: true, workout: rewrittenWorkout };
+  } catch (error: unknown) {
+    logger.error("Apply substitution option failed", error);
+    return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
