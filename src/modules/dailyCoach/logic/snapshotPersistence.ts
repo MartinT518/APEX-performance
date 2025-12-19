@@ -9,16 +9,16 @@ export interface PersistSnapshotInput {
   date: string;
   global_status: 'GO' | 'ADAPTED' | 'SHUTDOWN';
   reason: string;
-  votes: IAgentVote[];
-  finalWorkout: IWorkout;
-  certaintyScore?: number | null;
-  certaintyDelta?: number | null;
-  inputsSummary?: {
-    niggleScore: number | null;
-    strengthTier: string | null;
-    lastRunDuration: number;
-    fuelingCarbsPerHour: number | null;
-    fuelingGiDistress: number | null;
+  votes_jsonb: IAgentVote[];
+  final_workout_jsonb: IWorkout;
+  certainty_score?: number | null;
+  certainty_delta?: number | null;
+  inputs_summary_jsonb?: {
+    niggle_score: number | null;
+    strength_tier: string | null;
+    last_run_duration: number;
+    fueling_carbs_per_hour: number | null;
+    fueling_gi_distress: number | null;
   } | null;
 }
 
@@ -42,11 +42,11 @@ export async function persistDailySnapshot(input: PersistSnapshotInput): Promise
         date: input.date,
         global_status: input.global_status,
         reason: input.reason,
-        votes_jsonb: input.votes as unknown as import('@/types/database').Json,
-        final_workout_jsonb: input.finalWorkout as unknown as import('@/types/database').Json,
-        certainty_score: input.certaintyScore ?? null,
-        certainty_delta: input.certaintyDelta ?? null,
-        inputs_summary_jsonb: input.inputsSummary as unknown as import('@/types/database').Json ?? null
+        votes_jsonb: input.votes_jsonb as unknown as import('@/types/database').Json,
+        final_workout_jsonb: input.final_workout_jsonb as unknown as import('@/types/database').Json,
+        certainty_score: input.certainty_score ?? null,
+        certainty_delta: input.certainty_delta ?? null,
+        inputs_summary_jsonb: input.inputs_summary_jsonb as unknown as import('@/types/database').Json ?? null
       }, {
         onConflict: 'user_id,date'
       })

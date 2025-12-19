@@ -167,15 +167,14 @@ function DashboardContent() {
   const runInitialAnalysis = async () => {
     setIsLoading(true);
     try {
-      const result = await runCoachAnalysis();
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
+      const result = await runCoachAnalysis(userId);
       if (result.success) {
         setAnalysisResult(result);
       }
       
       // Calculate ValuationEngine probability
-      const { data: session } = await supabase.auth.getSession();
-      const userId = session?.session?.user?.id;
-      
       if (userId) {
         const endDate = new Date();
         const startDate = new Date();

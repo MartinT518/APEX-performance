@@ -52,7 +52,59 @@ export async function processSessionData(
           dataSource = 'GARMIN';
           activityId = `${activity.activityId}`;
           activityName = activity.activityName;
-          logger.info(`✅ Ingested ${sessionPoints.length} points from Garmin: ${activityName}`);
+          
+          // Capture summary metrics from Garmin objects
+          const distanceMeters = (activity.distance || (details as any).summaryDTO?.distance || 0) as number;
+          const avgSpeed = (activity.averageSpeed || (details as any).summaryDTO?.averageSpeed || 0) as number;
+          const distanceKm = distanceMeters > 0 ? distanceMeters / 1000 : undefined;
+          
+          // Calculate pace from avgSpeed (m/s) if available
+          let avgPace: string | undefined;
+          if (avgSpeed > 0) {
+            const paceSeconds = 1000 / avgSpeed;
+            const minutes = Math.floor(paceSeconds / 60);
+            const seconds = Math.floor(paceSeconds % 60);
+            avgPace = `${minutes}:${seconds.toString().padStart(2, '0')}/km`;
+          }
+
+          // Capture strength exercises if available
+          let protocol: { warmup?: string; main: string[]; cooldown?: string } | undefined;
+          const activityType = activity.activityType || '';
+          if (activityType.toLowerCase().includes('strength')) {
+            const detailObj = details as any;
+            const sets = detailObj.summaryDTO?.strengthTrainingDto?.sets || 
+                         detailObj.metadataDTO?.strengthTrainingDto?.sets || [];
+            
+            if (sets.length > 0) {
+              const exercises: string[] = [];
+              sets.forEach((set: any, idx: number) => {
+                const weight = set.weight ? ` @ ${(set.weight / 1000).toFixed(1)}kg` : '';
+                const reps = set.reps ? `${set.reps} reps` : 'Active';
+                const name = set.exerciseName || `Set ${idx + 1}`;
+                exercises.push(`${name}: ${reps}${weight}`);
+              });
+              protocol = { main: exercises };
+            }
+          }
+
+          logger.info(`✅ Ingested ${sessionPoints.length} points from Garmin: ${activityName} (${distanceKm?.toFixed(2)}km)`);
+          
+          // Return with enriched metadata
+          return {
+            points: sessionPoints,
+            diagnostics: { status: 'VALID', validPointCount: sessionPoints.length, originalPointCount: sessionPoints.length, flaggedIndices: [] },
+            integrity: { status: 'VALID', confidence: 1.0, reason: 'Live Garmin data', flags: [] },
+            metadata: {
+              dataSource,
+              activityId,
+              activityName,
+              timestamp: new Date().toISOString(),
+              distanceKm,
+              avgPace,
+              durationMinutes: Math.round(((activity.duration || 0) as number) / 60),
+              protocol // Add extracted protocol
+            }
+          };
         } else {
           logger.warn("⚠️ Garmin activity details not available");
         }

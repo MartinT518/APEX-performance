@@ -249,3 +249,18 @@
     * Falls back to localStorage for offline support.
 * **Data Flow:**
     * `Sensor Data` -> `Module K (Clean Data)` -> `Module A (Update Baselines)` -> `Module A (Calculate Probability)` -> `Module R (Coach Synthesis)` -> `UI Display`.
+
+## 21. Dynamic Metric Display Pattern
+* **Contextual UI:**
+    * Hero Stats (Volume/Load/Duration vs Distance/Pace/Duration) must adapt dynamically based on `session.type`.
+    * **Strength Sessions:** Display Volume (Reps) and Load (Total kg).
+    * **Cardio Sessions:** Display Distance (km) and Pace (min/km).
+* **Protocol Extraction:**
+    * Special handling for Strength sessions (`type === 'STR'`) to parse protocol strings.
+    * Extraction Logic: Parse "Exercise: X reps @ Y kg" strings from `protocol.main` array.
+    * Calculation: `Strength_Volume = Sum(reps)`, `Strength_Load = Sum(reps * weight)`.
+    * Fallback: If no specific objective, use Strength Fallback: "Strengthen the chassis..."
+* **Deep Sync Logic:**
+    * "Update" button triggers `force=true` re-sync.
+    * Bypasses persistence cache checks to overwrite existing sessions with enhanced metadata (like protocols).
+    * Crucial for enriching historical sessions when new parsing logic is deployed.

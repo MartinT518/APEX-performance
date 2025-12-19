@@ -5,8 +5,8 @@ import type { IAgentVote } from '@/types/agents';
 
 export interface SnapshotBuilderInput {
   decision: DecisionResult;
-  certaintyScore?: number;
-  certaintyDelta?: number;
+  certaintyScore?: number | null;
+  certaintyDelta?: number | null;
   inputsSummary: {
     niggleScore: number | null;
     strengthTier: string | null;
@@ -38,7 +38,13 @@ export function buildDailySnapshot(input: SnapshotBuilderInput): Omit<DailyDecis
     final_workout_jsonb: decision.finalWorkout as unknown as import('@/types/workout').IWorkout,
     certainty_score: certaintyScore ?? null,
     certainty_delta: certaintyDelta ?? null,
-    inputs_summary_jsonb: inputsSummary
+    inputs_summary_jsonb: {
+      niggle_score: inputsSummary.niggleScore,
+      strength_tier: inputsSummary.strengthTier,
+      last_run_duration: inputsSummary.lastRunDuration,
+      fueling_carbs_per_hour: inputsSummary.fuelingCarbsPerHour,
+      fueling_gi_distress: inputsSummary.fuelingGiDistress
+    }
   };
 }
 

@@ -15,7 +15,8 @@ export async function syncGarminSessionsToDatabase(
   garminClient: GarminClient | null,
   startDate: string,
   endDate: string,
-  userId: string
+  userId: string,
+  reSync: boolean = false
 ): Promise<{ synced: number; errors: number }> {
   if (!garminClient) {
     logger.info('Garmin client not available, skipping sync');
@@ -109,17 +110,30 @@ export async function syncGarminSessionsToDatabase(
     for (let i = 0; i < activities.length; i++) {
       const activity = activities[i];
       try {
+        const sportType = mapGarminSportType(activity.activityType || activity.activityName || 'running');
+
         // Check if session already exists (by activity ID in metadata)
         const { data: existing } = await supabase
           .from('session_logs')
-          .select('id')
+          .select('id, metadata')
           .eq('user_id', userId)
           .eq('metadata->>activityId', `${activity.activityId}`)
           .maybeSingle();
 
-        if (existing) {
-          // Already synced, skip
-          continue;
+        if (existing && !reSync) {
+          const existingMetadata = (existing as { metadata: Record<string, unknown> | null }).metadata;
+          const hasEnhancedMetadata = existingMetadata && (
+            existingMetadata.distanceKm !== undefined ||
+            existingMetadata.avgPace !== undefined ||
+            // For strength, check if protocol is missing
+            (sportType === 'STRENGTH' ? existingMetadata.protocol !== undefined : true)
+          );
+          
+          if (hasEnhancedMetadata) {
+            continue; // Skip insertion, already has sufficient data
+          }
+          
+          logger.info(`Session ${activity.activityId} needs enhancement.`);
         }
 
         // Add delay between requests to avoid rate limiting
@@ -160,12 +174,53 @@ export async function syncGarminSessionsToDatabase(
         const stream = adaptGarminToSessionStream(details);
         
         // Map sport type from activity
-        const sportType = mapGarminSportType(activity.activityType || activity.activityName || 'running');
+        // Map sport type from activity (already defined above)
+        // const sportType = mapGarminSportType(activity.activityType || activity.activityName || 'running');
         
         // Extract activity metadata (Garmin API may have different property names)
         const startTime = (activity.startTimeGMT || activity.startTimeLocal || details.startTimeGMT || new Date().toISOString()) as string;
         const durationSeconds = (activity.durationInSeconds || details.duration || 0) as number;
         
+        // Capture summary metrics from Garmin objects
+        const distanceMeters = (activity.distance || (details as any).summaryDTO?.distance || 0) as number;
+        const avgSpeed = (activity.averageSpeed || (details as any).summaryDTO?.averageSpeed || 0) as number;
+        const distanceKm = distanceMeters > 0 ? distanceMeters / 1000 : undefined;
+        
+        let avgPace: string | undefined;
+        if (avgSpeed > 0) {
+          const paceSeconds = 1000 / avgSpeed;
+          const minutes = Math.floor(paceSeconds / 60);
+          const seconds = Math.floor(paceSeconds % 60);
+          avgPace = `${minutes}:${seconds.toString().padStart(2, '0')}/km`;
+        }
+        
+        // Capture strength exercises if available - check multiple possible locations
+        let protocol: { warmup?: string; main: string[]; cooldown?: string } | undefined;
+        const detailObj = details as any;
+        const sets = detailObj.summaryDTO?.strengthTrainingDto?.exerciseSets ||
+                     detailObj.summaryDTO?.strengthTrainingDto?.sets || 
+                     detailObj.metadataDTO?.strengthTrainingDto?.sets ||
+                     detailObj.strengthTrainingDto?.sets ||
+                     detailObj.summaryDTO?.strengthSets || [];
+        
+        if (sets && Array.isArray(sets) && sets.length > 0) {
+          const exercises: string[] = [];
+          sets.forEach((set: any, idx: number) => {
+            const weightVal = set.weight !== undefined ? set.weight : set.weight;
+            const weightStr = (weightVal && weightVal > 0) ? ` @ ${(weightVal / 1000).toFixed(1)}kg` : '';
+            const reps = set.repetitionCount || set.reps || 'Active';
+            const repsStr = typeof reps === 'number' ? `${reps} reps` : reps;
+            
+            let name = set.exerciseName || `Set ${idx + 1}`;
+            if (!set.exerciseName && set.exercises && Array.isArray(set.exercises) && set.exercises.length > 0) {
+              name = set.exercises[0].name || set.exercises[0].category || name;
+            }
+            
+            exercises.push(`${name}: ${repsStr}${weightStr}`);
+          });
+          protocol = { main: exercises };
+        }
+
         // Create processing result
         const processingResult: SessionProcessingResult = {
           points: stream.dataPoints,
@@ -179,7 +234,10 @@ export async function syncGarminSessionsToDatabase(
             dataSource: 'GARMIN',
             activityId: `${activity.activityId}`,
             activityName: activity.activityName,
-            timestamp: new Date(startTime).toISOString()
+            timestamp: new Date(startTime).toISOString(),
+            distanceKm,
+            avgPace,
+            protocol // Add extracted protocol
           }
         };
 
@@ -191,26 +249,46 @@ export async function syncGarminSessionsToDatabase(
         // Override sport type with mapped value
         const finalSportType = sportType;
         
-        // Insert into database
-        const insertData = {
-          user_id: userId,
-          session_date: sessionLogData.sessionDate,
-          sport_type: finalSportType,
-          duration_minutes: sessionLogData.durationMinutes,
-          source: sessionLogData.source,
-          metadata: sessionLogData.metadata
-        };
-        
-        const { error: insertError } = await supabase
-          .from('session_logs')
-          .insert(insertData as never);
+        if (existing) {
+          logger.info(`Updating existing session ${activity.activityId}`);
+          const { error: updateError } = await supabase
+            .from('session_logs')
+            .update({
+              sport_type: finalSportType,
+              duration_minutes: durationMinutes,
+              metadata: sessionLogData.metadata
+            } as never)
+            .eq('id', (existing as { id: string }).id);
 
-        if (insertError) {
-          logger.error(`Failed to insert session for activity ${activity.activityId}`, insertError);
-          errors++;
+          if (updateError) {
+            logger.error(`Failed to update session ${activity.activityId}`, updateError);
+            errors++;
+          } else {
+            synced++;
+            logger.info(`Updated session ${activity.activityId}`);
+          }
         } else {
-          synced++;
-          logger.info(`Synced Garmin activity: ${activity.activityName} (${activity.activityId})`);
+          // Insert into database
+          const insertData = {
+            user_id: userId,
+            session_date: sessionLogData.sessionDate,
+            sport_type: finalSportType,
+            duration_minutes: sessionLogData.durationMinutes,
+            source: sessionLogData.source,
+            metadata: sessionLogData.metadata
+          };
+          
+          const { error: insertError } = await supabase
+            .from('session_logs')
+            .insert(insertData as never);
+
+          if (insertError) {
+            logger.error(`Failed to insert session for activity ${activity.activityId}`, insertError);
+            errors++;
+          } else {
+            synced++;
+            logger.info(`Synced session ${activity.activityId}`);
+          }
         }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
@@ -236,13 +314,13 @@ export async function syncGarminSessionsToDatabase(
 
 function mapGarminSportType(activityType: string): 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER' {
   const type = activityType.toLowerCase();
-  if (type.includes('running') || type.includes('run')) {
+  if (type.includes('running') || type.includes('run') || type.includes('treadmill')) {
     return 'RUNNING';
   }
-  if (type.includes('cycling') || type.includes('bike') || type.includes('biking')) {
+  if (type.includes('cycling') || type.includes('bike') || type.includes('biking') || type.includes('spinning')) {
     return 'CYCLING';
   }
-  if (type.includes('strength') || type.includes('weight') || type.includes('lifting')) {
+  if (type.includes('strength') || type.includes('weight') || type.includes('lifting') || type.includes('gym') || type.includes('training')) {
     return 'STRENGTH';
   }
   return 'OTHER';

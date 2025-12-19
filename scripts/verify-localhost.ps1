@@ -23,7 +23,8 @@ if (Test-Path ".env.local") {
     foreach ($var in $requiredVars) {
         if ($envContent -match "$var=" -and $envContent -notmatch "$var=your-") {
             Write-Host "   ✅ $var is set" -ForegroundColor Green
-        } else {
+        }
+        else {
             $errors += "$var is missing or not configured"
             Write-Host "   ❌ $var is missing or not configured" -ForegroundColor Red
         }
@@ -32,12 +33,14 @@ if (Test-Path ".env.local") {
     # Check for optional Garmin vars
     if ($envContent -match "GARMIN_EMAIL=" -and $envContent -notmatch "GARMIN_EMAIL=your-") {
         Write-Host "   ✅ GARMIN_EMAIL is set" -ForegroundColor Green
-    } else {
+    }
+    else {
         $warnings += "GARMIN_EMAIL not set (app will run in simulation mode)"
         Write-Host "   ⚠️  GARMIN_EMAIL not set (optional)" -ForegroundColor Yellow
     }
     
-} else {
+}
+else {
     $errors += ".env.local file not found"
     Write-Host "   ❌ .env.local not found" -ForegroundColor Red
     Write-Host "   💡 Run: .\scripts\setup-env.ps1" -ForegroundColor Cyan
@@ -49,7 +52,8 @@ Write-Host ""
 Write-Host "2. Checking npm dependencies..." -ForegroundColor Yellow
 if (Test-Path "node_modules") {
     Write-Host "   ✅ node_modules exists" -ForegroundColor Green
-} else {
+}
+else {
     $errors += "node_modules not found - run 'npm install'"
     Write-Host "   ❌ node_modules not found" -ForegroundColor Red
     Write-Host "   💡 Run: npm install" -ForegroundColor Cyan
@@ -64,11 +68,13 @@ if (Test-Path "garmin-connect-mcp-main") {
     
     if (Test-Path "garmin-connect-mcp-main\.env") {
         Write-Host "   ✅ Garmin MCP .env file exists" -ForegroundColor Green
-    } else {
+    }
+    else {
         $warnings += "Garmin MCP .env not found (optional for MCP server)"
         Write-Host "   ⚠️  Garmin MCP .env not found (optional)" -ForegroundColor Yellow
     }
-} else {
+}
+else {
     $warnings += "garmin-connect-mcp-main directory not found (optional)"
     Write-Host "   ⚠️  garmin-connect-mcp-main not found (optional)" -ForegroundColor Yellow
 }
@@ -81,11 +87,13 @@ try {
     $pythonVersion = python --version 2>&1
     if ($pythonVersion -match "Python 3\.(1[1-9]|[2-9][0-9])") {
         Write-Host "   ✅ Python 3.11+ found: $pythonVersion" -ForegroundColor Green
-    } else {
+    }
+    else {
         $warnings += "Python version may be too old (need 3.11+)"
         Write-Host "   ⚠️  Python found but version may be too old: $pythonVersion" -ForegroundColor Yellow
     }
-} catch {
+}
+catch {
     $warnings += "Python not found (optional for Garmin MCP)"
     Write-Host "   ⚠️  Python not found (optional)" -ForegroundColor Yellow
 }
@@ -97,7 +105,8 @@ Write-Host "5. Checking Supabase migration file..." -ForegroundColor Yellow
 if (Test-Path "supabase\migrations\001_initial_schema.sql") {
     Write-Host "   ✅ Migration file exists" -ForegroundColor Green
     Write-Host "   💡 Make sure to run this in Supabase SQL Editor" -ForegroundColor Cyan
-} else {
+}
+else {
     $errors += "Migration file not found"
     Write-Host "   ❌ Migration file not found" -ForegroundColor Red
 }
@@ -116,7 +125,8 @@ if ($errors.Count -eq 0) {
     Write-Host "1. Make sure Supabase migration is run" -ForegroundColor White
     Write-Host "2. Start dev server: npm run dev" -ForegroundColor White
     Write-Host "3. Open http://localhost:3000" -ForegroundColor White
-} else {
+}
+else {
     Write-Host "❌ Found $($errors.Count) error(s):" -ForegroundColor Red
     foreach ($error in $errors) {
         Write-Host "   - $error" -ForegroundColor Red

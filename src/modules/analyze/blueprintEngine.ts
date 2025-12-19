@@ -115,7 +115,7 @@ export function getCurrentPhase(date: Date): PhaseDefinition {
       maxAllowedZone: 'Z2_ENDURANCE',
       maxMonthlyVolume: 450, // km/month
       maxWeeklyVolume: 112.5, // ~450/4
-      hrCap: { min: 130, max: 145 }
+      hrCap: { min: 130, max: 145 } // Strict Z2/Base constraint
     };
   }
   
@@ -129,6 +129,7 @@ export function getCurrentPhase(date: Date): PhaseDefinition {
       maxAllowedZone: 'Z4_THRESHOLD',
       maxMonthlyVolume: 480, // km/month
       maxWeeklyVolume: 120, // ~480/4
+      hrCap: { min: 146, max: 172 } // Threshold integration allowed
     };
   }
   
@@ -142,7 +143,8 @@ export function getCurrentPhase(date: Date): PhaseDefinition {
       maxAllowedZone: 'Z5_VO2MAX',
       maxMonthlyVolume: 640, // km/month
       maxWeeklyVolume: 160, // km/week (Rule A-1)
-      requiresStructuralIntegrity: 80 // Minimum SIS for high volume
+      requiresStructuralIntegrity: 80, // Minimum SIS for high volume
+      hrCap: { min: 145, max: 188 } // VO2max sessions allowed
     };
   }
   
@@ -156,6 +158,7 @@ export function getCurrentPhase(date: Date): PhaseDefinition {
       maxAllowedZone: 'Z4_THRESHOLD',
       maxMonthlyVolume: 300, // km/month (Taper)
       maxWeeklyVolume: 75, // ~300/4
+      hrCap: { min: 130, max: 168 } // Sharp but controlled
     };
   }
   

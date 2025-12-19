@@ -24,12 +24,16 @@ import path from 'path';
 // Load environment variables for server actions
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-export async function runCoachAnalysis() {
+export async function runCoachAnalysis(providedUserId?: string) {
   logger.info("SERVER ACTION: runCoachAnalysis triggered");
   try {
     const supabase = createServerClient();
-    const { data: session } = await supabase.auth.getSession();
-    const userId = session?.session?.user?.id;
+    let userId = providedUserId;
+    
+    if (!userId) {
+      const { data: session } = await supabase.auth.getSession();
+      userId = session?.session?.user?.id;
+    }
     
     if (!userId) {
       return { success: false, message: "Not authenticated. Please log in." };
@@ -78,10 +82,10 @@ export async function runCoachAnalysis() {
       const snapshot = snapshotResult.snapshot;
       // Check if inputs have changed (compare inputs_summary)
       const inputsMatch = snapshot.inputs_summary_jsonb && 
-        snapshot.inputs_summary_jsonb.niggleScore === niggleScore &&
-        snapshot.inputs_summary_jsonb.strengthTier === strengthTier &&
-        snapshot.inputs_summary_jsonb.fuelingCarbsPerHour === fuelingCarbsPerHour &&
-        snapshot.inputs_summary_jsonb.fuelingGiDistress === fuelingGiDistress;
+        snapshot.inputs_summary_jsonb.niggle_score === niggleScore &&
+        snapshot.inputs_summary_jsonb.strength_tier === strengthTier &&
+        snapshot.inputs_summary_jsonb.fueling_carbs_per_hour === fuelingCarbsPerHour &&
+        snapshot.inputs_summary_jsonb.fueling_gi_distress === fuelingGiDistress;
       
       if (inputsMatch) {
         logger.info("Using cached snapshot");
@@ -165,6 +169,7 @@ export async function runCoachAnalysis() {
         processingResult = await DailyCoach.processSessionData([]);
         if (processingResult.metadata) {
             sessionMetadata = {
+                ...processingResult.metadata,
                 dataSource: processingResult.metadata.dataSource,
                 activityName: processingResult.metadata.activityName || 'N/A',
                 timestamp: processingResult.metadata.timestamp
@@ -404,11 +409,11 @@ export async function applySubstitutionOption(
       date: today,
       global_status: snapshot.global_status,
       reason: snapshot.reason,
-      votes: snapshot.votes_jsonb,
-      finalWorkout: rewrittenWorkout,
-      certaintyScore: snapshot.certainty_score,
-      certaintyDelta: snapshot.certainty_delta,
-      inputsSummary: snapshot.inputs_summary_jsonb
+      votes_jsonb: snapshot.votes_jsonb,
+      final_workout_jsonb: rewrittenWorkout,
+      certainty_score: snapshot.certainty_score,
+      certainty_delta: snapshot.certainty_delta,
+      inputs_summary_jsonb: snapshot.inputs_summary_jsonb
     });
 
     return { success: true, workout: rewrittenWorkout };
@@ -516,7 +521,7 @@ export async function syncGarminSessions(
     let result;
     try {
       logger.info("Attempting sync with MCP client (token persistence, efficient date-range queries)...");
-      result = await syncGarminSessionsToDatabaseMCP(startDate, endDate, userId);
+      result = await syncGarminSessionsToDatabaseMCP(startDate, endDate, userId, force);
       logger.info(`MCP sync result: ${result.synced} synced, ${result.errors} errors`);
     } catch (mcpError) {
       const mcpErrorMsg = mcpError instanceof Error ? mcpError.message : String(mcpError);
@@ -550,7 +555,7 @@ export async function syncGarminSessions(
         };
       }
       
-      result = await syncGarminSessionsToDatabase(garminClient, startDate, endDate, userId);
+      result = await syncGarminSessionsToDatabase(garminClient, startDate, endDate, userId, force);
     }
         
     return {

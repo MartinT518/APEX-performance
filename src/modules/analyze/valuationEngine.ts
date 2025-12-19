@@ -10,12 +10,7 @@
 import type { PrototypeSessionDetail } from '@/types/prototype';
 import { getCurrentPhase } from './blueprintEngine';
 
-export interface ValuationResult {
-  adherenceScore: number; // 0-100%
-  integrityRatio: number; // Ratio value (e.g., 0.8 = ideal)
-  blueprintProbability: number; // 0-100%
-  coachVerdict: 'ON TRACK' | 'HIGH RISK' | 'MODERATE RISK' | 'EXCELLENT';
-}
+// ValuationResult interface is defined later in the file near its generator functions.
 
 /**
  * Maps strength tier to numeric load value
@@ -83,7 +78,10 @@ function calculateSmartAdherenceScore(sessions: PrototypeSessionDetail[]): numbe
     
     let intensityCompliance = 0;
     
-    if (session.type === 'EXEC') {
+    if (session.compliance === 'MISSED' || session.type === 'MISSED') {
+      // Missed session or blueprint violation
+      intensityCompliance = 0;
+    } else if (session.type === 'EXEC') {
       // Executed as planned
       intensityCompliance = 1.0;
     } else if (session.type === 'SUB') {
@@ -100,11 +98,8 @@ function calculateSmartAdherenceScore(sessions: PrototypeSessionDetail[]): numbe
         // Invalid substitution counts as 0.5
         intensityCompliance = 0.5;
       }
-    } else if (session.type === 'MISSED' || session.compliance === 'MISSED') {
-      // Missed session
-      intensityCompliance = 0;
     } else {
-      // Other types (STR, REC, REST) count as planned
+      // Other types (STR, REC, REST) count as planned if not marked MISSED
       intensityCompliance = 1.0;
     }
 
@@ -300,15 +295,62 @@ function determineCoachVerdict(adherenceScore: number, integrityRatio: number): 
  * Main Valuation Engine function
  * Calculates all three equations and returns comprehensive result
  */
+export interface ValuationResult {
+  adherenceScore: number; // 0-100%
+  integrityRatio: number; // Ratio value (e.g., 0.8 = ideal)
+  blueprintProbability: number; // 0-100%
+  coachVerdict: 'ON TRACK' | 'POSITIVE DEVIATION' | 'RISK DETECTED';
+  vetoCount: number;
+  verdictText: string;
+}
+
+/**
+ * Generate a dynamic verdict based on campaign adherence and integrity.
+ */
+export function generateVerdict(adherence: number, integrity: number, vetoes: number): { verdict: ValuationResult['coachVerdict'], text: string } {
+  if (adherence > 90 && integrity > 1.0) {
+    return {
+      verdict: 'ON TRACK',
+      text: "Volume and Structure are balanced. Maintain course."
+    };
+  }
+  
+  if (adherence < 80 && vetoes > 2) {
+    return {
+      verdict: 'POSITIVE DEVIATION',
+      text: "Volume is low, but chassis is protected. Trust the taper."
+    };
+  }
+  
+  return {
+    verdict: 'RISK DETECTED',
+    text: "Discrepancy detected between intent and execution. Review metrics."
+  };
+}
+
+/**
+ * Main Valuation Engine function
+ * Calculates all three equations and returns comprehensive result
+ */
 export function calculateValuation(sessions: PrototypeSessionDetail[]): ValuationResult {
   if (sessions.length === 0) {
     return {
       adherenceScore: 0,
       integrityRatio: 0,
       blueprintProbability: 50,
-      coachVerdict: 'MODERATE RISK'
+      coachVerdict: 'RISK DETECTED',
+      vetoCount: 0,
+      verdictText: "No data available for analysis."
     };
   }
+
+  // Count Vetoes (Structural RED triggers)
+  const vetoes = sessions.filter(s => 
+    s.type === 'SUB' && (
+      s.agentFeedback?.structural?.toUpperCase().includes('RED') || 
+      s.compliance === 'SUBSTITUTED'
+    )
+  ).length;
 
   // Calculate Equation A: Smart Adherence Score
   const adherenceScore = calculateSmartAdherenceScore(sessions);
@@ -324,13 +366,15 @@ export function calculateValuation(sessions: PrototypeSessionDetail[]): Valuatio
   );
 
   // Determine Coach's Verdict
-  const coachVerdict = determineCoachVerdict(adherenceScore, integrityRatio);
+  const verdictInfo = generateVerdict(adherenceScore, integrityRatio, vetoes);
 
   return {
-    adherenceScore: Math.round(adherenceScore * 10) / 10, // Round to 1 decimal
-    integrityRatio: Math.round(integrityRatio * 100) / 100, // Round to 2 decimals
+    adherenceScore: Math.round(adherenceScore * 10) / 10,
+    integrityRatio: Math.round(integrityRatio * 100) / 100,
     blueprintProbability,
-    coachVerdict
+    coachVerdict: verdictInfo.verdict,
+    vetoCount: vetoes,
+    verdictText: verdictInfo.text
   };
 }
 

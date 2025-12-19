@@ -44,3 +44,5 @@
 * **Known Issues:** Page files exceed 100-line MAKER limit (intentional for prototype fidelity)
 * **Type Adapters:** `src/types/prototype.ts` bridges prototype types with database schema
 * **Decomposition:** Follow-up optimization task to split large page files into `logic/` subdirectories
+* **Integrations:**
+    * **Garmin:** Hybrid Sync via MCP (Python) + Supabase Edge Functions. Includes Deep Sync (retroactive update) and Strength Protocol Extraction.

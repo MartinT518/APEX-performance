@@ -144,6 +144,11 @@ export function sanitizeMetadata(metadata: Record<string, unknown>): Record<stri
     sanitized.durationMinutes = metadata.durationMinutes;
   }
   
+  // Allow protocol for exercises and workout structure
+  if (metadata.protocol && typeof metadata.protocol === 'object') {
+    sanitized.protocol = metadata.protocol;
+  }
+  
   // Only store essential diagnostics fields
   if (metadata.diagnostics && typeof metadata.diagnostics === 'object') {
     const diag = metadata.diagnostics as Record<string, unknown>;
@@ -165,9 +170,22 @@ export function sessionResultToLogData(
   durationMinutes: number,
   sessionDate?: string // Allow passing custom date for historical sync
 ): SessionLogData {
-  const sportType: 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER' = 
-    result.metadata?.dataSource === 'GARMIN' ? 'RUNNING' : 'OTHER';
+  const trainingType = (result.metadata?.trainingType as string || '').toLowerCase();
   
+  // Determine sport type and source
+  let sportType: 'RUNNING' | 'CYCLING' | 'STRENGTH' | 'OTHER' = 'OTHER';
+  if (result.metadata?.dataSource === 'GARMIN') {
+    if (trainingType.includes('run') || trainingType.includes('treadmill')) {
+      sportType = 'RUNNING';
+    } else if (trainingType.includes('cycle') || trainingType.includes('bike') || trainingType.includes('spinning')) {
+      sportType = 'CYCLING';
+    } else if (trainingType.includes('strength') || trainingType.includes('weight') || trainingType.includes('lifting') || trainingType.includes('gym')) {
+      sportType = 'STRENGTH';
+    } else {
+      sportType = 'RUNNING'; // Default Garmin to RUNNING if unsure
+    }
+  }
+
   const source: 'garmin_health' | 'manual_upload' | 'test_mock' = 
     result.metadata?.dataSource === 'GARMIN' ? 'garmin_health' : 'test_mock';
 
@@ -181,9 +199,9 @@ export function sessionResultToLogData(
     ? Math.max(...validPoints.map(p => p.heartRate || 0))
     : undefined;
 
-  // Calculate distance from speed if available
-  let distanceKm: number | undefined;
-  if (result.points.length > 0 && result.points[0].speed) {
+  // Calculate distance from speed if available (Backwards compatibility or if metadata missing)
+  let distanceKm: number | undefined = result.metadata?.distanceKm as number | undefined;
+  if (distanceKm === undefined && result.points.length > 0 && result.points[0].speed) {
     // Sum up distance from speed * time intervals
     let totalDistance = 0;
     for (let i = 1; i < result.points.length; i++) {
@@ -198,8 +216,8 @@ export function sessionResultToLogData(
   }
 
   // Calculate pace from distance and duration
-  let pace: string | undefined;
-  if (distanceKm && durationMinutes > 0) {
+  let pace: string | undefined = result.metadata?.avgPace as string | undefined;
+  if (!pace && distanceKm && durationMinutes > 0) {
     const paceSeconds = (durationMinutes * 60) / distanceKm;
     const minutes = Math.floor(paceSeconds / 60);
     const seconds = Math.floor(paceSeconds % 60);
@@ -219,7 +237,12 @@ export function sessionResultToLogData(
     avgPace: pace,
     avgHR,
     maxHR,
-    durationMinutes
+    durationMinutes,
+    protocol: result.metadata?.protocol, // Keep protocol in metadata
+    trainingType: result.metadata?.trainingType,
+    calories: result.metadata?.calories,
+    elevationGain: result.metadata?.elevationGain,
+    avgRunCadence: result.metadata?.avgRunCadence
   };
 
   return {

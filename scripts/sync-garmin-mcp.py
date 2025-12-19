@@ -191,6 +191,21 @@ def sync_activities_by_date_range(start_date: str, end_date: str) -> dict:
                 try:
                     # Use get_activity() method to get full details
                     details = client.safe_call('get_activity', activity_id)
+                    
+                    # For strength training, we also need exercise sets
+                    if activity_type_key == 'strength_training':
+                        try:
+                            logger.info(f"Fetching exercise sets for activity {activity_id}...")
+                            sets = client.safe_call('get_activity_exercise_sets', activity_id)
+                            if sets:
+                                # Standard way to represent this in the details object
+                                # so that the Node side can find it
+                                if 'summaryDTO' not in details:
+                                    details['summaryDTO'] = {}
+                                details['summaryDTO']['strengthTrainingDto'] = sets
+                        except Exception as set_err:
+                            logger.warn(f"Failed to fetch exercise sets for activity {activity_id}: {set_err}")
+                            
                 except Exception as detail_err:
                     # If details fetch fails, still include basic info
                     logger.warning(f"Failed to fetch details for activity {activity_id}: {detail_err}")
@@ -219,6 +234,13 @@ def sync_activities_by_date_range(start_date: str, end_date: str) -> dict:
                     'startTimeGMT': activity.get('startTimeGMT'),
                     'startTimeLocal': activity.get('startTimeLocal'),
                     'durationInSeconds': duration_seconds,
+                    'distance': activity.get('distance'),
+                    'averagePace': activity.get('averagePace'),
+                    'averageHR': activity.get('averageHR'),
+                    'maxHR': activity.get('maxHR'),
+                    'avgRunCadence': activity.get('avgRunCadence'),
+                    'calories': activity.get('calories'),
+                    'elevationGain': activity.get('elevationGain'),
                     'details': details  # Full activity details for session processing
                 })
             except Exception as e:

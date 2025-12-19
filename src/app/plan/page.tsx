@@ -26,6 +26,8 @@ function PlanContent() {
   const [selectedSession, setSelectedSession] = useState<PrototypeSessionDetail | null>(null);
   const [showPAR, setShowPAR] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<IAnalysisResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [upcomingSessions, setUpcomingSessions] = useState<PrototypeSessionDetail[]>([]);
   const [pastSessions, setPastSessions] = useState<Map<string, { type: string; status: 'executed' | 'substituted' }>>(new Map());
 
@@ -105,14 +107,17 @@ function PlanContent() {
     try {
       console.log('[Tactical Map] Starting loadPlanData...');
       logger.info('Loading plan data for tactical map');
+
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
       
-      const result = await runCoachAnalysis();
+      const result = await runCoachAnalysis(userId);
       console.log('[Tactical Map] runCoachAnalysis result:', {
         success: result.success,
         hasDecision: !!result.decision,
         hasFinalWorkout: !!result.decision?.finalWorkout,
         decisionKeys: result.decision ? Object.keys(result.decision) : [],
-        error: result.error
+        message: result.message
       });
       
       if (result.success) {
@@ -195,12 +200,16 @@ function PlanContent() {
         logger.info(`Generated ${sessions.length} upcoming sessions for tactical map`);
         setUpcomingSessions(sessions);
       } else {
-        console.error('[Tactical Map] runCoachAnalysis failed:', result.error);
-        logger.error('Failed to load plan data - analysis unsuccessful', result.error);
+        console.error('[Tactical Map] runCoachAnalysis failed:', result.message);
+        setError(result.message || 'Analysis unsuccessful');
+        logger.error('Failed to load plan data - analysis unsuccessful', result.message);
       }
     } catch (err) {
       console.error('[Tactical Map] Error in loadPlanData:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
       logger.error('Failed to load plan data', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -337,8 +346,16 @@ function PlanContent() {
           <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 text-center">
             <p className="text-slate-500 text-sm mb-2">No upcoming sessions loaded</p>
             <p className="text-slate-600 text-xs mb-2">
-              {analysisResult ? 'Analysis completed but no workout generated' : 'Loading analysis...'}
+              {loading ? 'Analyzing Chassis & Engine...' : error ? error : 'Analysis completed but no workout generated'}
             </p>
+            {error && error.includes('Audit Required') && (
+              <button 
+                onClick={() => window.location.href = '/'}
+                className="mt-4 px-4 py-2 bg-emerald-500 text-slate-950 rounded-lg text-xs font-bold hover:bg-emerald-400 transition-colors"
+              >
+                COMPLETE DAILY LOG
+              </button>
+            )}
             {process.env.NODE_ENV === 'development' && (
               <div className="text-xs text-slate-600 mt-2 space-y-1 text-left">
                 <div>Analysis result: {analysisResult ? '✅ Loaded' : '❌ Not loaded'}</div>

@@ -57,7 +57,8 @@ $existingContent = ""
 if (Test-Path $mcpEnvPath) {
     $existingContent = Get-Content $mcpEnvPath -Raw
     Write-Host "📝 Updating existing .env file..." -ForegroundColor Yellow
-} else {
+}
+else {
     Write-Host "📝 Creating new .env file..." -ForegroundColor Yellow
 }
 
