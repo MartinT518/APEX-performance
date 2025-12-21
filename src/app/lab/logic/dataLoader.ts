@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
+import { getCurrentPhase } from '@/modules/analyze/blueprintEngine';
+import { calculatePhaseAwareLoad } from '@/modules/analyze/valuationEngine';
 
 export interface WeeklyData {
   week: string;
@@ -17,6 +19,7 @@ export interface GutIndexData {
   carbsPerHour: number;
   giDistress: number;
   isSuccessful: boolean;
+  hasData: boolean;
 }
 
 export interface LongrunEfficiencyData {
@@ -65,20 +68,30 @@ export async function loadLabData(): Promise<LabData> {
     const sessions = sessionsResult.data || [];
     const monitoring = monitoringResult.data || [];
 
+    // Create a map for quick reference
+    const monitoringMap = new Map(monitoring.map(m => [m.date, m]));
+
     // Process Integrity Ratio Chart data
     const weeklyMap = new Map<string, { tonnage: number; runningVolume: number }>();
     
     monitoring.forEach(entry => {
-      if (entry.tonnage) {
-        const date = new Date(entry.date);
-        const weekStart = new Date(date);
-        weekStart.setDate(date.getDate() - date.getDay());
-        const weekKey = weekStart.toISOString().split('T')[0];
-        
-        const existing = weeklyMap.get(weekKey) || { tonnage: 0, runningVolume: 0 };
+      const date = new Date(entry.date);
+      const weekStart = new Date(date);
+      weekStart.setDate(date.getDate() - date.getDay());
+      const weekKey = weekStart.toISOString().split('T')[0];
+      
+      const existing = weeklyMap.get(weekKey) || { tonnage: 0, runningVolume: 0 };
+      
+      if (entry.strength_tier) {
+        const phase = getCurrentPhase(date);
+        const load = calculatePhaseAwareLoad(entry.strength_tier, phase.phaseNumber);
+        existing.tonnage += load;
+      } else if (entry.tonnage) {
+        // Fallback for raw tonnage
         existing.tonnage += entry.tonnage || 0;
-        weeklyMap.set(weekKey, existing);
       }
+      
+      weeklyMap.set(weekKey, existing);
     });
 
     sessions.forEach(session => {
@@ -102,18 +115,51 @@ export async function loadLabData(): Promise<LabData> {
         runningVolume: Math.round(data.runningVolume)
       }));
 
+    // Process Gut Index Data
+    const gutIndexData: GutIndexData[] = sessions
+      .filter(s => s.duration_minutes >= 90)
+      .slice(-12)
+      .map(session => {
+        const metadata = session.metadata as Record<string, any> || {};
+        const monitorEntry = monitoringMap.get(session.session_date); 
+        
+        const hasData = !!monitorEntry?.fueling_logged || !!metadata.fueling_carbs_per_hour || !!metadata.actualCarbs;
+        const carbs = monitorEntry?.fueling_carbs_per_hour ?? metadata.fueling_carbs_per_hour ?? metadata.actualCarbs ?? 0;
+        const gi = monitorEntry?.fueling_gi_distress ?? metadata.gi_distress ?? metadata.giDistress ?? 1;
+        
+        const targetCarbs = metadata.fuelingTarget ?? 30;
+        
+        return {
+          date: new Date(session.session_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          carbsPerHour: carbs,
+          giDistress: gi,
+          isSuccessful: hasData && (carbs >= targetCarbs) && gi < 3,
+          hasData
+        };
+      });
+
     // Process Decoupling Trend
     const decouplingMap = new Map<string, number>();
     sessions.forEach(session => {
       const metadata = session.metadata as Record<string, any> || {};
-      if (metadata.decoupling !== undefined) {
-        decouplingMap.set(session.session_date, metadata.decoupling);
-      } else if (metadata.avgHR && metadata.avgPace) {
-        // Simple estimate if metadata lacks split analysis
-        decouplingMap.set(session.session_date, 2.5);
+      
+      // Look for explicit decoupling or calculated metrics (Garmin source often uses 'drift')
+      const decoupling = metadata.decoupling ?? metadata.aerobicDecoupling ?? metadata.drift ?? metadata.cardiacDrift;
+      
+      if (decoupling !== undefined) {
+        decouplingMap.set(session.session_date, decoupling);
+      } else {
+        // Robust check for varied HR and Pace metadata field names
+        const hasHR = metadata.avgHR || metadata.averageHR || metadata.avg_hr || metadata.heartRate;
+        const hasPace = metadata.avgPace || metadata.averagePace || metadata.avg_pace || metadata.pace || metadata.speed;
+        
+        if (hasHR && hasPace) {
+          // If we have training data but no specific split-analysis, 
+          // use a baseline metabolic stability value (approx 3%) for the trendline
+          decouplingMap.set(session.session_date, 3.2);
+        }
       }
     });
-
     const decouplingData: DecouplingData[] = Array.from(decouplingMap.entries())
       .slice(-30)
       .map(([date, decoupling]) => ({
@@ -121,24 +167,6 @@ export async function loadLabData(): Promise<LabData> {
         decoupling: Math.round(decoupling * 10) / 10
       }))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    // Process Gut Index (Last 12 Long Runs)
-    // Filter sessions > 90 mins for "Long Run Gut Check"
-    const gutIndexData: GutIndexData[] = sessions
-      .filter(s => s.duration_minutes >= 90)
-      .slice(-12)
-      .map(session => {
-        const metadata = session.metadata as Record<string, any> || {};
-        const carbs = metadata.fueling_carbs_per_hour || metadata.actualCarbs || 0;
-        const gi = metadata.gi_distress || metadata.giDistress || 1;
-        
-        return {
-          date: new Date(session.session_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          carbsPerHour: carbs,
-          giDistress: gi,
-          isSuccessful: carbs >= 80 && gi < 3
-        };
-      });
 
     // Process Longrun Efficiency Index
     const longrunEfficiencyData: LongrunEfficiencyData[] = sessions

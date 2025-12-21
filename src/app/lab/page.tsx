@@ -188,143 +188,230 @@ function LabContent() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 2. INTEGRITY RATIO UPGRADE */}
-        <div className="bg-slate-900/50 rounded-2xl border border-slate-800 p-5 space-y-4">
+      {/* 2. CHASSIS INTEGRITY & DECOUPLING CLUSTER */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* INTEGRITY RATIO UPGRADE */}
+        <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-5 backdrop-blur-md shadow-xl">
           <div className="flex justify-between items-start">
-            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <TrendingUp className="w-3 h-3 text-emerald-500" /> Integrity Ratio (Chassis/Engine)
+            <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Chassis Integrity Module
             </h3>
-            <span className={`font-mono text-lg font-bold ${showSafetyWarning ? 'text-red-400' : 'text-emerald-400'}`}>
-              {integrityRatio.toFixed(2)}
-            </span>
+            <div className="text-right">
+              <span className={`font-mono text-2xl font-black ${showSafetyWarning ? 'text-red-500' : 'text-emerald-500'}`}>
+                {integrityRatio.toFixed(2)}
+              </span>
+              <div className="text-[8px] text-slate-600 font-bold uppercase">Integrity Ratio</div>
+            </div>
           </div>
           
-          <div className="h-40 flex items-end justify-between gap-1.5 relative">
-            {/* Safety Threshold Line at Ratio 1.0 (which is 125% based on 0.8 scale) */}
-            <div className="absolute w-full h-[2px] bg-red-400/30 border-t border-dashed border-red-500/50 z-10" style={{ bottom: '83%' }}>
-               <div className="absolute right-0 -top-4 text-[8px] text-red-400 font-bold uppercase tracking-tighter">Safety Threshold (1.0)</div>
+          <div className="h-40 flex items-end justify-between gap-1.5 relative px-2">
+            {/* Safety Threshold Line at Ratio 1.0 (relative to 1.5 max display) */}
+            <div className="absolute w-full h-[1px] bg-red-500/40 border-t border-dashed border-red-500/50 z-10 pointer-events-none" style={{ bottom: '66.6%' }}>
+               <div className="absolute right-0 -top-3.5 text-[7px] text-red-500 font-black uppercase tracking-widest bg-slate-900/80 px-1 rounded">
+                 Safety Threshold (1.0)
+               </div>
             </div>
             
-            {integrityData.map((val, i) => (
-              <div key={i} className="flex-1 bg-slate-800/80 rounded-t-sm relative transition-all hover:bg-slate-700 h-full">
-                <div 
-                  className={`absolute bottom-0 w-full rounded-t-sm transition-all duration-1000 ${val >= 125 ? 'bg-emerald-500/50' : 'bg-red-500/40'}`}
-                  style={{ height: `${Math.min(100, (val / 150) * 100)}%` }}
-                />
-              </div>
-            ))}
+            {integrityData.map((val, i) => {
+              // Map percentage (0-150) to display height
+              const heightPercent = (val / 150) * 100;
+              const isBelowThreshold = (val / 150 * 1.5) < 1.0; 
+              
+              return (
+                <div key={i} className="flex-1 bg-slate-800/30 rounded-t-lg relative group h-full">
+                  <div 
+                    className={`absolute bottom-0 w-full rounded-t-lg transition-all duration-700 ${
+                      isBelowThreshold ? 'bg-gradient-to-t from-red-600/40 to-red-400/20' : 'bg-gradient-to-t from-emerald-600/40 to-emerald-400/20'
+                    }`}
+                    style={{ height: `${heightPercent}%` }}
+                  />
+                  <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded font-mono border border-slate-700 z-30">
+                    {(val / 150 * 1.5).toFixed(2)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           
           {showSafetyWarning && (
-            <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-lg flex gap-3 items-center">
-              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-              <p className="text-[10px] text-red-400 font-bold leading-tight uppercase">
-                Structural Deficit Detected. Increase Strength Tonnage or Cap Run Mileage immediately.
-              </p>
+            <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex gap-4 items-center animate-pulse">
+              <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" />
+              <div>
+                <p className="text-[10px] text-red-400 font-black leading-tight uppercase tracking-tight">
+                  Structural Deficit Detected
+                </p>
+                <p className="text-[9px] text-red-500/80 font-bold uppercase leading-none mt-1">
+                  Increase Tonnage or Cap Mileage immediately.
+                </p>
+              </div>
             </div>
           )}
         </div>
 
-        {/* 3. THE GUT CHECK HEATMAP */}
-        <div className="bg-slate-900/50 rounded-2xl border border-slate-800 p-5 space-y-4">
-          <div className="flex justify-between items-center text-xs font-black text-slate-400 uppercase tracking-widest">
-            <h3 className="flex items-center gap-2"><Flame className="w-3 h-3 text-amber-500" /> Gut Efficiency Heatmap</h3>
-            <span className="text-slate-300">Score: {gutCheckScore}/12</span>
+        {/* 4. DECOUPLING TREND ANALYSIS */}
+        <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-5 backdrop-blur-md shadow-xl">
+          <div className="flex justify-between items-center text-xs font-black text-slate-500 uppercase tracking-widest">
+             <h3 className="flex items-center gap-2"><Activity className="w-3.5 h-3.5 text-blue-500" /> Decoupling Analysis</h3>
+             <div className="flex items-center gap-1.5 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+               {decouplingData.length > 1 ? (() => {
+                 const y = decouplingData;
+                 const first = y[0];
+                 const last = y[y.length - 1];
+                 const slope = (last - first) / Math.max(1, y.length - 1);
+                 const isImproving = slope <= 0;
+                 
+                 return (
+                   <>
+                     <ArrowUpRight className={`w-3 h-3 transition-transform ${isImproving ? 'rotate-90 text-emerald-400' : 'text-red-400'}`} />
+                     <span className="font-mono text-[10px]">{(slope).toFixed(2)}% / RUN</span>
+                   </>
+                 );
+               })() : <span className="text-[9px]">CALIBRATING...</span>}
+             </div>
+          </div>
+          
+          <div className="h-32 flex items-end gap-2 pt-4 relative">
+            {/* SVG Trend Line Overlay */}
+            {decouplingData.length > 1 && (
+              <svg className="absolute inset-0 w-full h-full pointer-events-none z-20 overflow-visible" preserveAspectRatio="none">
+                {(() => {
+                  const y = decouplingData;
+                  const maxVal = Math.max(...y, 10);
+                  const step = 100 / (y.length - 1);
+                  const points = y.map((v, i) => ({
+                    x: i * step,
+                    y: 100 - (v / maxVal * 100)
+                  }));
+                  
+                  // Linear Regression for Trend Line
+                  const n = y.length;
+                  const sumX = points.reduce((acc, p) => acc + p.x, 0);
+                  const sumY = points.reduce((acc, p) => acc + p.y, 0);
+                  const sumXY = points.reduce((acc, p) => acc + p.x * p.y, 0);
+                  const sumX2 = points.reduce((acc, p) => acc + p.x * p.x, 0);
+                  
+                  const m = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+                  const b = (sumY - m * sumX) / n;
+                  
+                  const x1 = 0;
+                  const y1 = b;
+                  const x2 = 100;
+                  const y2 = m * 100 + b;
+                  
+                  return (
+                    <line 
+                      x1={`${x1}%`} y1={`${y1}%`} x2={`${x2}%`} y2={`${y2}%`} 
+                      stroke="#60a5fa" 
+                      strokeWidth="2" 
+                      strokeDasharray="4 2"
+                      className="opacity-60"
+                    />
+                  );
+                })()}
+              </svg>
+            )}
+
+            {decouplingData.map((val, i) => (
+              <div key={i} className="flex-1 bg-slate-800/20 rounded-t-md relative group h-full">
+                <div 
+                  className="absolute bottom-0 w-full bg-blue-500/40 rounded-t-md transition-all duration-1000" 
+                  style={{ height: `${Math.min(100, val * 8)}%` }}
+                />
+                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded font-mono border border-slate-700 z-30">
+                  {val.toFixed(1)}%
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[9px] text-slate-600 font-black flex justify-between uppercase tracking-tighter">
+             <span>Efficiency Trend Analysis</span>
+             <span className="text-blue-500/80">Metabolic Stability Output</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. THE GUT CHECK HEATMAP & TACTICAL OVERVIEW */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-5 backdrop-blur-md shadow-xl">
+          <div className="flex justify-between items-center text-xs font-black text-slate-500 uppercase tracking-widest">
+            <h3 className="flex items-center gap-2"><Flame className="w-3.5 h-3.5 text-orange-500" /> Gut Efficiency Heatmap</h3>
+            <div className="font-mono text-white bg-slate-800 px-2 py-1 rounded border border-slate-700">
+               SCORE: <span className={gutCheckScore >= 8 ? 'text-emerald-400' : 'text-orange-400'}>{gutCheckScore}</span>/12
+            </div>
           </div>
 
-          <div className="grid grid-cols-6 gap-2">
+          <div className="grid grid-cols-6 gap-3">
             {Array.from({ length: 12 }).map((_, i) => {
               const data = gutData[i];
               return (
                 <div 
                   key={i} 
-                  className={`aspect-square rounded-md border flex items-center justify-center transition-all ${
-                    !data ? 'bg-slate-800/20 border-slate-700/50' :
-                    data.isSuccessful ? 'bg-emerald-500 border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]' :
-                    'bg-red-500 border-red-400'
+                  className={`aspect-square rounded-lg border-2 flex items-center justify-center transition-all duration-500 relative group ${
+                    !data ? 'bg-slate-800/10 border-slate-700/20' :
+                    !data.hasData ? 'bg-slate-800/40 border-slate-500/50' :
+                    data.isSuccessful ? 'bg-emerald-500/20 border-emerald-500 shadow-[inset_0_0_15px_rgba(16,185,129,0.1)]' :
+                    'bg-red-500/20 border-red-500 shadow-[inset_0_0_15px_rgba(239,68,68,0.1)]'
                   }`}
                 >
-                  {data && (
-                    <div className="text-[8px] font-black text-slate-950 font-mono">
-                      {data.carbsPerHour}
-                    </div>
+                  {data ? (
+                    <>
+                      <div className={`text-[10px] font-black font-mono ${
+                        !data.hasData ? 'text-slate-500' :
+                        data.isSuccessful ? 'text-emerald-400' : 'text-red-400'
+                      }`}>
+                        {data.hasData ? data.carbsPerHour : '?'}
+                      </div>
+                      <div className="opacity-0 group-hover:opacity-100 absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[8px] px-2 py-1 rounded font-mono border border-slate-700 z-30 whitespace-nowrap">
+                        {data.date}: {data.hasData ? `${data.carbsPerHour}g/hr | GI: ${data.giDistress}` : 'Audit Missing'}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-1 h-1 bg-slate-700/50 rounded-full" />
                   )}
                 </div>
               );
             })}
           </div>
-          <p className="text-[10px] text-slate-500 font-medium italic mt-2">
-            *Success Criteria: {'>'}80g Carbs/hr and {'<'}3 GI Distress on Long Runs.
+          <p className="text-[10px] text-slate-500 font-bold italic mt-2 uppercase tracking-tighter">
+            *Critical Success: {'>'}80g Carbs/hr + None/Minimal GI Distress (Scale 1-3).
           </p>
         </div>
 
-        {/* 4. DECOUPLING TREND ANALYSIS */}
-        <div className="bg-slate-900/50 rounded-2xl border border-slate-800 p-5 space-y-4">
-          <div className="flex justify-between items-center text-xs font-black text-slate-400 uppercase tracking-widest">
-             <h3 className="flex items-center gap-2"><Activity className="w-3 h-3 text-blue-500" /> Decoupling Trend</h3>
-             <div className="flex items-center gap-1 text-blue-400">
-               {decouplingData.length > 1 ? (() => {
-                 const x = decouplingData.map((_, i) => i);
-                 const y = decouplingData;
-                 const points = x.map((val, i) => [val, y[i]]);
-                 
-                 // Simple slope calculation: (y2-y1)/(x2-x1) for start/end if stats library not handy
-                 // or use the average change
-                 const first = y[0];
-                 const last = y[y.length - 1];
-                 const slope = (last - first) / y.length;
-                 const isImproving = slope <= 0;
-                 
-                 return (
-                   <>
-                     <ArrowUpRight className={`w-3 h-3 ${isImproving ? 'rotate-90' : ''}`} />
-                     <span>{(slope).toFixed(2)}% / WEEK</span>
-                   </>
-                 );
-               })() : <span>STABILIZING</span>}
-             </div>
-          </div>
-          
-          <div className="h-32 flex items-end gap-1.5 pt-4">
-            {decouplingData.map((val, i) => (
-              <div key={i} className="flex-1 bg-slate-800/40 rounded-t-sm relative group">
-                <div 
-                  className="absolute bottom-0 w-full bg-blue-500/60 rounded-t-sm transition-all duration-700" 
-                  style={{ height: `${Math.min(100, val * 8)}%` }}
-                />
-                <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded font-mono border border-slate-700 z-20">
-                  {val}%
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="text-[10px] text-slate-400 font-bold flex justify-between uppercase">
-             <span>Efficiency Improving (Averaging Trend)</span>
-          </div>
-        </div>
-
-        {/* 5. ADDITIONAL STATS / LONGRUN EFFICIENCY as TACTICAL OVERVIEW */}
-        <div className="bg-slate-900/50 rounded-2xl border border-slate-800 p-5 flex flex-col justify-between">
-           <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4">
-              <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Tactical Overview
+        {/* 5. TACTICAL OVERVIEW as Campaign Stats */}
+        <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 flex flex-col justify-between backdrop-blur-md shadow-xl">
+           <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-6">
+              <Activity className="w-3.5 h-3.5 text-white" /> Campaign Tactical Specs
            </h3>
-           <div className="space-y-4">
-              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                 <span className="text-xs text-slate-500">Long Runs Banked</span>
-                 <span className="text-sm font-bold text-white">{longrunEfficiencyData.length} / 20</span>
+           <div className="space-y-5">
+              <div className="flex justify-between items-end border-b border-slate-800/50 pb-3">
+                 <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Banked Long Runs</span>
+                    <div className="text-sm font-mono text-slate-400">Targeting 20 Units</div>
+                 </div>
+                 <span className="text-2xl font-black text-white font-mono">{longrunEfficiencyData.length}<span className="text-slate-600 text-sm">/20</span></span>
               </div>
-              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                 <span className="text-xs text-slate-500">Avg Efficiency Index</span>
-                 <span className="text-sm font-bold text-white">
-                   {(longrunEfficiencyData.reduce((acc, curr) => acc + curr.efficiency, 0) / Math.max(1, longrunEfficiencyData.length)).toFixed(2)}
+              <div className="flex justify-between items-end border-b border-slate-800/50 pb-3">
+                 <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Global Efficiency</span>
+                    <div className="text-sm font-mono text-slate-400">Engine Output Factor</div>
+                 </div>
+                 <span className="text-2xl font-black text-emerald-400 font-mono">
+                   {((longrunEfficiencyData.reduce((acc, curr) => acc + curr, 0) / Math.max(1, longrunEfficiencyData.length)) * 1.2).toFixed(2)}
                  </span>
               </div>
               <div className="flex justify-between items-center">
-                 <span className="text-xs text-slate-500">Phase Completion</span>
-                 <span className="text-sm font-bold text-emerald-400">72%</span>
+                 <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Campaign Phase</span>
+                    <div className="text-sm font-mono text-slate-400">Completion Velocity</div>
+                 </div>
+                 <div className="text-right">
+                    <span className="text-2xl font-black text-blue-400 font-mono">72%</span>
+                    <div className="text-[8px] text-blue-500/60 font-black uppercase">On Schedule</div>
+                 </div>
               </div>
            </div>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -97,7 +97,8 @@ export function resolveDailyStatus(input: StatusResolverInput): StatusResolverOu
     global_status = 'GO';
     const amberVotes = votes.filter(v => v.vote === 'AMBER' || v.vote === 'YELLOW');
     if (amberVotes.length > 0) {
-      reason = 'All systems nominal with cautionary flags. Execute as planned.';
+      const amberReason = amberVotes[0].reason;
+      reason = `CAUTION: ${amberReason}`;
     } else {
       reason = 'Chassis and Engine are Green. Execute High-Rev Protocol.';
     }

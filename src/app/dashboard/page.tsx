@@ -5,9 +5,9 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { ErrorBoundary } from '@/components/errors/ErrorBoundary';
 import { useMonitorStore } from '@/modules/monitor/monitorStore';
 import { usePhenotypeStore } from '@/modules/monitor/phenotypeStore';
-import { runCoachAnalysis } from '../actions';
+import { runCoachAnalysis, backfillDailyMonitoring } from '../actions';
 import { IAnalysisResult } from '@/types/analysis';
-import { calculateValuation } from '@/modules/analyze/valuationEngine';
+import { calculateValuation, type ValuationResult } from '@/modules/analyze/valuationEngine';
 import { loadSessionsWithVotes } from '../history/logic/sessionLoader';
 import { sessionWithVotesToPrototype } from '@/types/prototype';
 import { 
@@ -31,7 +31,7 @@ function DashboardContent() {
   const { todayEntries, setNiggleScore, logStrengthSession, logFueling, loadTodayMonitoring, getDaysSinceLastLift } = useMonitorStore();
   const { profile, loadProfile } = usePhenotypeStore();
   const [niggleScore, setNiggleScoreLocal] = useState(0);
-  const [liftStatus, setLiftStatus] = useState<'NONE' | 'MAIN' | 'HYPER' | 'STR'>('NONE');
+  const [liftStatus, setLiftStatus] = useState<'NONE' | 'MAIN' | 'HYPER' | 'STR' | 'EXPL'>('NONE');
   const [showIntervention, setShowIntervention] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
   const [showPAR, setShowPAR] = useState(false);
@@ -45,6 +45,8 @@ function DashboardContent() {
   const [fuelingCarbsPerHour, setFuelingCarbsPerHour] = useState<number | null>(null);
   const [fuelingGiDistress, setFuelingGiDistress] = useState<number | null>(null);
   const [lastRunDuration, setLastRunDuration] = useState<number>(0);
+  const [valuation, setValuation] = useState<ValuationResult | null>(null);
+  const [isChassisDirty, setIsChassisDirty] = useState(false);
 
   // Load data on mount
   useEffect(() => {
@@ -63,6 +65,7 @@ function DashboardContent() {
       if (tier === 'maintenance') setLiftStatus('MAIN');
       else if (tier === 'hypertrophy') setLiftStatus('HYPER');
       else if (tier === 'strength' || tier === 'power') setLiftStatus('STR');
+      else if (tier === 'explosive') setLiftStatus('EXPL');
     } else {
       setLiftStatus('NONE');
     }
@@ -195,9 +198,11 @@ function DashboardContent() {
         );
         
         // Calculate valuation
-        const valuation = calculateValuation(prototypeSessions);
+        const valuationResult = calculateValuation(prototypeSessions);
+        setValuation(valuationResult);
+        
         // Cap probability at 85% - High-Rev athlete always carries 15% risk of structural failure
-        const newScore = Math.min(85, valuation.blueprintProbability);
+        const newScore = Math.min(85, valuationResult.blueprintProbability);
         
         // Calculate delta from previous score
         if (previousCertaintyScore !== null) {
@@ -230,32 +235,50 @@ function DashboardContent() {
     }
   };
 
-  const handleSliderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
     setNiggleScoreLocal(val);
-    
-    try {
-      await setNiggleScore(val);
-      const wasAdapted = niggleScore > 3;
-      if (val > 3 && !wasAdapted) {
-        setShowIntervention(true);
-      }
-    } catch (err) {
-      logger.error('Failed to save niggle score', err);
-    }
+    setIsChassisDirty(true);
   };
 
-  const handleLiftStatusChange = async (status: 'MAIN' | 'HYPER' | 'STR') => {
+  const handleLiftStatusChange = (status: 'MAIN' | 'HYPER' | 'STR' | 'EXPL') => {
     setLiftStatus(status);
+    setIsChassisDirty(true);
+  };
+
+  const handleSaveChassisAudit = async () => {
     try {
-      const tierMap = {
-        'MAIN': 'maintenance' as const,
-        'HYPER': 'hypertrophy' as const,
-        'STR': 'strength' as const
+      setIsLoading(true);
+      
+      // Save Niggle
+      await setNiggleScore(niggleScore);
+      
+      // Save Strength Status
+      const tierMap: Record<string, 'maintenance' | 'hypertrophy' | 'strength' | 'explosive'> = {
+        'MAIN': 'maintenance',
+        'HYPER': 'hypertrophy',
+        'STR': 'strength',
+        'EXPL': 'explosive'
       };
-      await logStrengthSession(true, tierMap[status]);
+      
+      const performed = liftStatus !== 'NONE';
+      const tier = performed ? tierMap[liftStatus] : undefined;
+      
+      await logStrengthSession(performed, tier);
+      
+      // Reload analysis to update Integrity Ratio
+      await runInitialAnalysis();
+      
+      // Trigger intervention if niggle is high
+      if (niggleScore > 3) {
+        setShowIntervention(true);
+      }
+      
+      setIsChassisDirty(false);
     } catch (err) {
-      logger.error('Failed to save strength session', err);
+      logger.error('Failed to save chassis audit', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -397,18 +420,23 @@ function DashboardContent() {
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
           <div className="flex items-center gap-2 mb-3">
-            <Dumbbell className={`w-4 h-4 ${isAdapted ? 'text-red-400' : 'text-slate-400'}`} />
+            <Dumbbell className={`w-4 h-4 ${valuation?.integrityRatio && valuation.integrityRatio < 0.8 ? 'text-red-400' : 'text-slate-400'}`} />
             <span className="text-xs font-bold text-slate-400">CHASSIS</span>
           </div>
           <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
             <div 
               className={`absolute top-0 left-0 h-full transition-all duration-500 ${
-                isAdapted ? 'w-[40%] bg-red-500' : 'w-[85%] bg-emerald-500'
+                !valuation?.integrityRatio ? 'w-[60%] bg-slate-600' :
+                valuation.integrityRatio < 0.8 ? 'bg-red-500' :
+                valuation.integrityRatio < 1.0 ? 'bg-amber-500' : 'bg-emerald-500'
               }`} 
+              style={{ width: `${Math.min(100, (valuation?.integrityRatio || 0.6) * 100)}%` }}
             />
           </div>
           <div className="mt-3 flex justify-between text-[10px] text-slate-500 font-mono">
-            <span>LIFT: {liftStatus === 'NONE' ? `${getDaysSinceLastLift()}d AGO` : 'TODAY'}</span>
+            <span className={valuation?.integrityRatio && valuation.integrityRatio < 0.8 ? 'text-red-400 font-bold' : ''}>
+              {valuation?.chassisVerdict || `LIFT: ${liftStatus === 'NONE' ? `${getDaysSinceLastLift()}d AGO` : 'TODAY'}`}
+            </span>
             <span>NIGGLE: {niggleScore}/10</span>
           </div>
         </div>
@@ -514,7 +542,7 @@ function DashboardContent() {
             <span className="text-sm text-slate-300">Did you lift today?</span>
           </div>
           {/* Granular Strength Tonnage Input */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
              <button 
                 onClick={() => handleLiftStatusChange('MAIN')}
                 className={`text-xs py-2 rounded border ${
@@ -545,12 +573,53 @@ function DashboardContent() {
              >
                Power/Str
              </button>
+             <button 
+                onClick={() => handleLiftStatusChange('EXPL')}
+                className={`text-xs py-2 rounded border ${
+                  liftStatus === 'EXPL' 
+                    ? 'bg-amber-500/20 border-amber-500 text-amber-400 font-bold animate-pulse' 
+                    : 'bg-slate-800 border-slate-700 text-slate-500'
+                }`}
+             >
+               Explosive/Plyo
+             </button>
           </div>
           {liftStatus === 'NONE' && (
              <p className="text-[10px] text-slate-500 text-center italic mt-1">
                *Select tier to credit Chassis Integrity Score
              </p>
           )}
+
+          <button
+            onClick={handleSaveChassisAudit}
+            disabled={!isChassisDirty || isLoading}
+            className={`w-full mt-4 font-bold py-2 rounded-lg transition-all ${
+              isChassisDirty 
+                ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 animate-pulse' 
+                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+            }`}
+          >
+            {isLoading ? 'SAVING...' : isChassisDirty ? 'SAVE CHASSIS AUDIT' : 'CHASSIS LOGGED'}
+          </button>
+
+          <button
+            onClick={async () => {
+                if (confirm('Backfill Dec 1-19 with Niggle:0 and Strength defaults (Dec 17: Power, Dec 16: Explosive)?')) {
+                    setIsLoading(true);
+                    const res = await backfillDailyMonitoring();
+                    if (res.success) {
+                        alert(`Successfully backfilled ${res.count} days!`);
+                        await runInitialAnalysis();
+                    } else {
+                        alert(`Backfill failed: ${res.message || res.error}`);
+                    }
+                    setIsLoading(false);
+                }
+            }}
+            className="w-full mt-2 text-[10px] text-slate-500 hover:text-slate-400 font-mono py-1 border border-slate-800 rounded flex items-center justify-center gap-1"
+          >
+            <TrendingUp className="w-3 h-3" /> BACKFILL HISTORY
+          </button>
         </div>
 
         {/* Fueling Audit - Show when required */}
@@ -579,14 +648,14 @@ function DashboardContent() {
                 <div className="flex items-center gap-3">
                   <input
                     type="range"
-                    min="1"
+                    min="0"
                     max="10"
-                    value={fuelingGiDistress ?? 5}
+                    value={fuelingGiDistress ?? 0}
                     onChange={(e) => setFuelingGiDistress(Number(e.target.value))}
                     className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
                   />
                   <span className="text-sm font-mono text-white w-12 text-right">
-                    {fuelingGiDistress ?? 5}/10
+                    {fuelingGiDistress ?? 0}/10
                   </span>
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-600 mt-1">

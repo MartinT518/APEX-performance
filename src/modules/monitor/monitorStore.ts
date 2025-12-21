@@ -4,7 +4,7 @@ import { persistNiggleScore, persistStrengthSession, persistFuelingLog } from '.
 import { loadTodayMonitoringFromSupabase } from './monitorStore/logic/loader';
 import { getTodayDate, getDaysSinceLastLift } from './monitorStore/logic/dateUtils';
 
-export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power';
+export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
 
 interface MonitorState {
   todayEntries: {

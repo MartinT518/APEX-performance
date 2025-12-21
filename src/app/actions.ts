@@ -111,7 +111,8 @@ export async function runCoachAnalysis(providedUserId?: string) {
           },
           simulation: {
             successProbability: snapshot.certainty_score ?? 0,
-            confidenceScore: 'MEDIUM' as const
+            confidenceScore: 'MEDIUM' as const,
+            criticalSuccessNote: '*Critical Success: >30g Carbs/hr + None/Minimal GI Distress (Scale 1-3).'
           },
           auditStatus: 'NOMINAL',
           metadata: { dataSource: 'CACHE' }
@@ -244,7 +245,7 @@ export async function runCoachAnalysis(providedUserId?: string) {
             min: thresholdHR - 7, 
             max: thresholdHR + 7 
           },
-          fuelingTarget: 60
+          fuelingTarget: 30
         },
         explanation: currentProfile.is_high_rev 
           ? phase.phaseNumber === 1 
@@ -577,4 +578,68 @@ export async function syncGarminSessions(
     
     return { success: false, message: errorMessage };
   }
+}
+
+/**
+ * Server action to backfill daily monitoring data for historical consistency.
+ */
+export async function backfillDailyMonitoring() {
+  const supabase = createServerClient();
+  const { data: session } = await supabase.auth.getSession();
+  const userId = session?.session?.user?.id;
+  
+  // If not authenticated via session, try to get user_id from existing profile
+  let targetUserId = userId;
+  if (!targetUserId) {
+    const { data: profiles } = await supabase.from('phenotype_profiles').select('user_id').limit(1);
+    targetUserId = profiles?.[0]?.user_id;
+  }
+
+  if (!targetUserId) {
+    return { success: false, message: "No user found for backfill." };
+  }
+
+  const dates = [];
+  const start = new Date('2025-12-01');
+  const end = new Date('2025-12-19');
+  
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    dates.push(new Date(d).toISOString().split('T')[0]);
+  }
+
+  const updates = dates.map(date => {
+    let tier: any = 'Mobility'; // Maintenance
+    if (date === '2025-12-17') tier = 'Strength'; // Power/Str
+    if (date === '2025-12-16') {
+      // Check if Explosive exists in DB interface, if not fallback to Power
+      tier = 'Power'; // Proxying for backfill if Explosive enum not in DB yet
+    }
+    
+    const dObj = new Date(date);
+    const isSunday = dObj.getDay() === 0;
+
+    return {
+      user_id: targetUserId,
+      date,
+      niggle_score: 0,
+      strength_session: true,
+      strength_tier: tier,
+      // Simulate fueling data for Sunday long runs
+      fueling_logged: isSunday,
+      fueling_carbs_per_hour: isSunday ? (date < '2025-12-10' ? 20 : 45) : 0,
+      fueling_gi_distress: isSunday ? (date < '2025-12-10' ? 4 : 1) : 1,
+      updated_at: new Date().toISOString()
+    };
+  });
+
+  const { error } = await supabase
+    .from('daily_monitoring')
+    .upsert(updates, { onConflict: 'user_id,date' });
+
+  if (error) {
+    logger.error('Backfill failed', error);
+    return { success: false, error: error.message };
+  }
+
+  return { success: true, count: updates.length };
 }

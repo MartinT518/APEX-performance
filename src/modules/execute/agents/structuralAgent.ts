@@ -1,5 +1,7 @@
 import { IAgentVote, TonnageTier } from '@/types/agents';
 import type { ISessionSummary } from '@/types/session';
+import { getCurrentPhase } from '../../analyze/blueprintEngine';
+import { calculatePhaseAwareLoad } from '../../analyze/valuationEngine';
 import { useMonitorStore } from '../../monitor/monitorStore';
 
 /**
@@ -39,21 +41,14 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
   // Acute = last 7 days tonnage, Chronic = last 28 days average tonnage
   let acuteChronicRatio: number | undefined;
   const monitor = useMonitorStore.getState();
+  const currentDate = new Date();
+  const phase = getCurrentPhase(currentDate);
+
   try {
     // Get tonnage history from monitor store
-    // Note: This requires accessing historical data - for now, we'll use a simplified calculation
-    // In a full implementation, we'd fetch from baseline_metrics table
     const lastLiftTier = await monitor.getLastLiftTier();
     if (lastLiftTier) {
-      // Simplified: Use tier as proxy for tonnage
-      // Power = 4, Strength = 3, Hypertrophy = 2, Maintenance = 1
-      const tierMultiplier: Record<TonnageTier, number> = {
-        'power': 4,
-        'strength': 3,
-        'hypertrophy': 2,
-        'maintenance': 1
-      };
-      const acuteTonnage = tierMultiplier[lastLiftTier] * 1000; // Simplified
+      const acuteTonnage = calculatePhaseAwareLoad(lastLiftTier, phase.phaseNumber);
       const chronicTonnage = acuteTonnage * 0.8; // Simplified - would use rolling average
       acuteChronicRatio = chronicTonnage > 0 ? acuteTonnage / chronicTonnage : undefined;
     }
@@ -64,6 +59,7 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
 
   // Strength-to-Volume Ratio: Max_Weekly_KM = (Tonnage_Tier * 20) + 60
   const TONNAGE_TIER_MULTIPLIER: Record<TonnageTier | 'none', number> = {
+    'explosive': 5,  // 5 * 20 + 60 = 160km/week (Max stability)
     'power': 4,      // 4 * 20 + 60 = 140km/week
     'strength': 3,   // 3 * 20 + 60 = 120km/week
     'hypertrophy': 2, // 2 * 20 + 60 = 100km/week
@@ -130,10 +126,9 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
 
   // 3. AMBER VETO: Strength Maintenance
   // "Structure Before Engine" - If we haven't lifted, we shouldn't run hard.
-  // Adjust threshold based on tonnage tier (armor status)
   let MAX_DAYS_WITHOUT_LIFT = 5;
   
-  if (tonnageTier === 'power' || tonnageTier === 'strength') {
+  if (tonnageTier === 'power' || tonnageTier === 'strength' || tonnageTier === 'explosive') {
     // Heavy lift = "armored" chassis, extend threshold to 7 days
     MAX_DAYS_WITHOUT_LIFT = 7;
   }
@@ -149,25 +144,53 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
       agentId: 'structural_agent',
       vote: 'AMBER',
       confidence: 0.9,
-      reason: `Chassis Weakness Risk: Strength training frequency below maintenance. ${tonnageTier === 'power' || tonnageTier === 'strength' ? 'Armored chassis allows 7 days.' : 'Standard threshold is 5 days.'}`,
+      reason: `Chassis Weakness Risk: Strength training frequency below maintenance. ${MAX_DAYS_WITHOUT_LIFT} days allowed for ${tonnageTier || 'none'} tier.`,
       flaggedMetrics,
-      score: 70 // Moderate risk due to strength deficiency
+      score: 70
     };
   }
 
-  // 4. GREEN
-  // Calculate normalized risk score (0-100) for AgentVote interface
-  let riskScore = 0;
-  if (niggleScore > 0) riskScore += niggleScore * 10; // Each niggle point = 10 risk
-  if (daysSinceLastLift > 5) riskScore += (daysSinceLastLift - 5) * 5; // Each day over 5 = 5 risk
-  if (currentWeeklyVolume !== undefined && tonnageTier) {
-    const maxWeeklyKM = calculateMaxWeeklyVolume(tonnageTier);
-    if (currentWeeklyVolume > maxWeeklyKM) {
-      const excessPercent = ((currentWeeklyVolume - maxWeeklyKM) / maxWeeklyKM) * 100;
-      riskScore += excessPercent * 0.5; // Excess volume adds risk
-    }
+  // 4. PHASE-SPECIFIC VETOES (The "Screw Tightening")
+  const effectiveLoad = calculatePhaseAwareLoad(tonnageTier, phase.phaseNumber);
+  
+  // Phase 2: Power Conversion requires Intensity
+  if (phase.phaseNumber === 2 && effectiveLoad < 2000) {
+    return {
+      agentId: 'structural_agent',
+      vote: 'AMBER',
+      confidence: 0.95,
+      reason: `Structural Defecit: Phase 2 Power Conversion REQUIRES high-torque lifting (Strength/Power tier). Maintenance tier is insufficient for tendon stiffening.`,
+      flaggedMetrics: [],
+      score: 60
+    };
   }
-  riskScore = Math.min(100, riskScore); // Cap at 100
+
+  // Phase 3: Peak Performance requires RFD
+  if (phase.phaseNumber === 3 && effectiveLoad < 3000) {
+    const isRed = currentWeeklyVolume > 100;
+    return {
+      agentId: 'structural_agent',
+      vote: isRed ? 'RED' : 'AMBER',
+      confidence: 0.9,
+      reason: `Structural Risk: Phase 3 requires Explosive/Plyo training to offset highest mechanical running stress. ${isRed ? 'RED VETO: High volume mandates explosive shielding.' : 'AMBER: Increase lifting intensity.'}`,
+      flaggedMetrics: [],
+      score: isRed ? 30 : 50
+    };
+  }
+
+  // 5. GREEN
+  // Calculate normalized risk score (0-100)
+  let riskScore = 0;
+  if (niggleScore > 0) riskScore += niggleScore * 10;
+  if (daysSinceLastLift > MAX_DAYS_WITHOUT_LIFT) riskScore += (daysSinceLastLift - MAX_DAYS_WITHOUT_LIFT) * 5;
+  
+  const maxWeeklyKM = calculateMaxWeeklyVolume(tonnageTier);
+  if (currentWeeklyVolume !== undefined && currentWeeklyVolume > maxWeeklyKM) {
+    const excessPercent = ((currentWeeklyVolume - maxWeeklyKM) / maxWeeklyKM) * 100;
+    riskScore += excessPercent * 0.5;
+  }
+  
+  riskScore = Math.min(100, riskScore);
   
   return {
     agentId: 'structural_agent',

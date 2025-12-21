@@ -1,6 +1,6 @@
 import type { TonnageTier } from '../monitorStore';
 
-export type DatabaseStrengthTier = 'Mobility' | 'Hypertrophy' | 'Strength' | 'Power';
+export type DatabaseStrengthTier = 'Mobility' | 'Hypertrophy' | 'Strength' | 'Power' | 'Explosive';
 
 /**
  * Maps TonnageTier to database enum
@@ -11,6 +11,7 @@ export function tonnageTierToDb(tier: TonnageTier): DatabaseStrengthTier {
     'hypertrophy': 'Hypertrophy',
     'strength': 'Strength',
     'power': 'Power',
+    'explosive': 'Explosive',
   };
   return mapping[tier];
 }
@@ -24,6 +25,7 @@ export function dbToTonnageTier(tier: DatabaseStrengthTier): TonnageTier {
     'Hypertrophy': 'hypertrophy',
     'Strength': 'strength',
     'Power': 'power',
+    'Explosive': 'explosive',
   };
   return mapping[tier];
 }

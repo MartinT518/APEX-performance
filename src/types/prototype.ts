@@ -50,6 +50,7 @@ export interface PrototypeSessionDetail {
   strengthLoad?: number; // total weight in kg
   trainingType?: string; // e.g., "Threshold", "Zone 2", "Intervals"
   compliance?: 'COMPLIANT' | 'SUBSTITUTED' | 'MISSED'; // Compliance with plan
+  hidden?: boolean; // If true, hide from training logs (but use for valuation)
 }
 
 /**
@@ -59,13 +60,18 @@ export function sessionWithVotesToPrototype(
   session: SessionWithVotes,
   dailyMonitoring: SessionWithVotes['dailyMonitoring'] | null
 ): PrototypeSessionDetail {
-  // Determine session type from sport_type
+  // Determine session type from sport_type (case-insensitive)
+  const sportType = (session.sport_type || '').toUpperCase();
   let type: PrototypeSessionDetail['type'] = 'EXEC';
-  if (session.sport_type === 'STRENGTH') {
+  
+  if (sportType === 'STRENGTH') {
     type = 'STR';
-  } else if (session.sport_type === 'CYCLING') {
-    type = 'SUB'; // Substitution
-  } else if (session.sport_type === 'RUNNING') {
+  } else if (sportType === 'CYCLING') {
+    type = 'SUB'; 
+  } else if (sportType === 'RUNNING') {
+    type = 'EXEC';
+  } else {
+    // Default to EXEC if unknown but has running indicators
     type = 'EXEC';
   }
 
@@ -128,10 +134,9 @@ export function sessionWithVotesToPrototype(
 
   // Extract hidden variables from daily monitoring
   const hiddenVariables = dailyMonitoring ? {
-    niggle: dailyMonitoring.niggle_score || 0,
+    niggle: dailyMonitoring.niggle_score ?? 0,
     strengthTier: dailyMonitoring.strength_tier || 'NONE',
-    // GI distress not directly stored in database - would need separate field
-    giDistress: undefined
+    giDistress: dailyMonitoring.fueling_gi_distress ?? 0
   } : undefined;
 
   // Calculate load (use duration as proxy, or extract from metadata)
@@ -293,7 +298,8 @@ export function sessionWithVotesToPrototype(
     strengthVolume,
     strengthLoad,
     trainingType,
-    compliance
+    compliance,
+    hidden: (metadata as any)?.hidden === true
   };
 }
 

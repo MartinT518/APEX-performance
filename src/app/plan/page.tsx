@@ -18,6 +18,9 @@ import {
 import type { PrototypeSessionDetail } from '@/types/prototype';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
+import { loadSessionsWithVotes } from '../history/logic/sessionLoader';
+import { sessionWithVotesToPrototype } from '@/types/prototype';
+import { generateStrategicPlan } from '@/modules/analyze/plannerEngine';
 
 type PlanSubView = 'list' | 'detail';
 
@@ -127,66 +130,31 @@ function PlanContent() {
         const sessions: PrototypeSessionDetail[] = [];
         
         if (result.decision?.finalWorkout) {
-          console.log('[Tactical Map] finalWorkout found:', result.decision.finalWorkout);
           const today = new Date();
           const workout = result.decision.finalWorkout;
           
           // Today's workout
           const todaySession = workoutToPrototypeSession(workout, 'Today');
-          console.log('[Tactical Map] Today session created:', todaySession);
           sessions.push(todaySession);
           
-          // Generate a few future sessions (mock for now - would come from plan)
-          for (let i = 1; i <= 3; i++) {
-            const date = new Date(today);
-            date.setDate(date.getDate() + i);
-            const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+          // ANALYZE PREVIOUS 14 DAYS TO GENERATE STRATEGIC PLAN
+          if (userId) {
+            const historyStart = new Date(today);
+            historyStart.setDate(today.getDate() - 14);
             
-            // Create mock future sessions
-            const futureSession = {
-              id: 100 + i,
-              day: dayName,
-              title: i === 1 ? 'Chassis Hardening (HLRT)' : i === 2 ? '32km Simulation Run' : 'Aerobic Flush (Bike)',
-              type: i === 1 ? 'STR' : i === 2 ? 'KEY' : 'REC',
-              load: i === 2 ? 'EXTREME' : i === 1 ? 'MED' : 'LOW',
-              duration: i === 2 ? '2h 15m' : '60 min',
-              objective: i === 1 
-                ? 'Max Force Production & Tendon Stiffness'
-                : i === 2
-                ? 'Glycogen Depletion Management'
-                : 'Non-impact blood flow to accelerate recovery',
-              protocol: i === 1 ? {
-                warmup: '10 min Mobility (Hips/Ankles) + Core Activation',
-                main: [
-                  'A1. Hex Bar Deadlift: 4 x 5 @ 85% 1RM',
-                  'A2. Box Jumps: 4 x 3 (Max Height)',
-                  'B1. Bulgarian Split Squat: 3 x 8/leg (Heavy)',
-                  'B2. Soleus Calf Raises: 3 x 12 (Slow Eccentric)'
-                ],
-                cooldown: '5 min Dead Hangs & Decompression'
-              } : i === 2 ? {
-                warmup: '15 min Easy (HR < 145)',
-                main: [
-                  '3 x 5km @ Marathon Pace (Target: 3:33/km)',
-                  'Recovery: 1km Float (4:00/km) between reps'
-                ],
-                cooldown: '10 min flush jog'
-              } : {
-                warmup: '10 min spin',
-                main: ['40 min steady Zone 1 Power'],
-                cooldown: '10 min spin'
-              },
-              constraints: i === 1 ? [
-                'Leave 2 Reps In Reserve (RIR 2)',
-                'Perfect Form > Weight',
-                'Rest 3 min between heavy sets'
-              ] : i === 2 ? [
-                'HR Cap: Do not exceed 188 bpm',
-                'Cadence: Maintain >178 spm when fatigued'
-              ] : ['Cadence > 90 rpm', 'Power < 150w']
-            };
-            console.log(`[Tactical Map] Future session ${i} created:`, futureSession);
-            sessions.push(futureSession);
+            const historySessions = await loadSessionsWithVotes(
+              userId,
+              { start: historyStart.toISOString().split('T')[0], end: today.toISOString().split('T')[0] },
+              'ALL'
+            );
+            
+            const prototypeHistory = historySessions.map(s => 
+              sessionWithVotesToPrototype(s, s.dailyMonitoring || null)
+            );
+            
+            // Generate next 7 days based on history analysis
+            const futurePlan = generateStrategicPlan(prototypeHistory, today);
+            sessions.push(...futurePlan);
           }
         } else {
           console.warn('[Tactical Map] No finalWorkout in decision:', {
@@ -390,6 +358,11 @@ function PlanContent() {
                 {s.type === 'STR' && (
                   <div className="bg-violet-500/10 text-violet-400 text-[10px] px-2 py-1 rounded border border-violet-500/20">
                     STR
+                  </div>
+                )}
+                {s.type === 'EXPL' && (
+                  <div className="bg-amber-500/10 text-amber-400 text-[10px] px-2 py-1 rounded border border-amber-500/20 font-bold animate-pulse">
+                    EXPL
                   </div>
                 )}
                 <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-emerald-500 transition-colors" />

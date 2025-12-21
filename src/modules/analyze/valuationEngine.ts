@@ -13,26 +13,54 @@ import { getCurrentPhase } from './blueprintEngine';
 // ValuationResult interface is defined later in the file near its generator functions.
 
 /**
- * Maps strength tier to numeric load value
+ * Step 1: Phase-Aware Load Weighting
+ * Logic changes based on physiological requirements of the phase.
+ */
+export function calculatePhaseAwareLoad(tier: string | undefined, phaseNumber: number): number {
+  const normTier = tier?.toUpperCase() || 'NONE';
+  
+  // Phase 1: Aerobic Base (Consistency is Priority)
+  if (phaseNumber === 1) {
+    if (normTier === 'MAIN' || normTier === 'MOBILITY') return 1250; // 50 * 25
+    if (normTier === 'HYPER' || normTier === 'HYPERTROPHY') return 2500; // 100 * 25
+    if (normTier === 'STR' || normTier === 'STRENGTH' || normTier === 'POWER') return 3750; // 150 * 25
+    if (normTier === 'EXPLOSIVE' || normTier === 'PLYO') return 3750; // 150 * 25
+    return 0;
+  }
+  
+  // Phase 2: Power Conversion (Intensity is Priority - Penalize light weights)
+  if (phaseNumber === 2) {
+    if (normTier === 'MAIN' || normTier === 'MOBILITY') return 500; // 20 * 25
+    if (normTier === 'HYPER' || normTier === 'HYPERTROPHY') return 2000; // 80 * 25
+    if (normTier === 'STR' || normTier === 'STRENGTH' || normTier === 'POWER') return 3750; // 150 * 25
+    if (normTier === 'EXPLOSIVE' || normTier === 'PLYO') return 3750; // 150 * 25
+    return 0;
+  }
+  
+  // Phase 3: Peak Performance (RFD and Explosiveness is Priority)
+  if (phaseNumber === 3) {
+    if (normTier === 'MAIN' || normTier === 'MOBILITY') return 250; // 10 * 25
+    if (normTier === 'HYPER' || normTier === 'HYPERTROPHY') return 1250; // 50 * 25
+    if (normTier === 'STR' || normTier === 'STRENGTH' || normTier === 'POWER') return 3000; // 120 * 25
+    if (normTier === 'EXPLOSIVE' || normTier === 'PLYO') return 5000; // 200 * 25
+    return 0;
+  }
+
+  // Phase 4: Taper (Maintenance/Rest)
+  if (phaseNumber === 4) {
+    if (normTier === 'MAIN' || normTier === 'MOBILITY') return 2500; // 100 * 25
+    return 1250; // 50 * 25
+  }
+
+  return 0;
+}
+
+/**
+ * Maps strength tier to numeric load value (Legacy/Fallback)
  */
 function strengthTierToLoad(tier: string | undefined): number {
-  switch (tier) {
-    case 'STR':
-    case 'Power':
-    case 'strength':
-      return 150;
-    case 'HYPER':
-    case 'Hypertrophy':
-    case 'hypertrophy':
-      return 100;
-    case 'MAIN':
-    case 'Mobility':
-    case 'maintenance':
-      return 50;
-    case 'NONE':
-    default:
-      return 0;
-  }
+  const phase = getCurrentPhase(new Date());
+  return calculatePhaseAwareLoad(tier, phase.phaseNumber);
 }
 
 /**
@@ -146,9 +174,18 @@ function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays:
 
   // Collect tonnage history (strength sessions)
   const tonnageHistory: number[] = [];
+  const currentDate = new Date();
+  const phase = getCurrentPhase(currentDate);
+
   recentSessions.forEach(session => {
-    if (session.type === 'STR' || session.hiddenVariables?.strengthTier) {
-      const load = strengthTierToLoad(session.hiddenVariables?.strengthTier);
+    if (session.type === 'STR') {
+      const tier = session.hiddenVariables?.strengthTier;
+      let load = calculatePhaseAwareLoad(tier, phase.phaseNumber);
+      
+      // Fallback: If no tier but duration > 15m, grant baseline "STR" load
+      if (load === 0 && session.duration) {
+        load = calculatePhaseAwareLoad('STR', phase.phaseNumber); 
+      }
       tonnageHistory.push(load);
     }
   });
@@ -179,7 +216,7 @@ function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays:
 
   // Normalize units: (Tonnage/1000) / (Volume/10)
   // This prevents 10,000kg vs 100km from being a 100:1 ratio
-  const normalizedTonnage = tonnageAvg / 1000;
+  const normalizedTonnage = (tonnageAvg > 0 ? tonnageAvg : 0) / 1000;
   const normalizedVolume = volumeAvg / 10;
 
   return normalizedVolume > 0 ? normalizedTonnage / normalizedVolume : 0;
@@ -302,29 +339,38 @@ export interface ValuationResult {
   coachVerdict: 'ON TRACK' | 'POSITIVE DEVIATION' | 'RISK DETECTED';
   vetoCount: number;
   verdictText: string;
+  chassisVerdict: string;
 }
 
 /**
  * Generate a dynamic verdict based on campaign adherence and integrity.
  */
-export function generateVerdict(adherence: number, integrity: number, vetoes: number): { verdict: ValuationResult['coachVerdict'], text: string } {
+export function generateVerdict(adherence: number, integrity: number, vetoes: number): { verdict: ValuationResult['coachVerdict'], text: string, chassis: string } {
+  let chassisVerdict = "Chassis is stable.";
+  if (integrity < 0.8) chassisVerdict = "Structural Deficit detected.";
+  if (integrity < 0.6) chassisVerdict = "CRITICAL: Chassis Compromised.";
+  if (integrity > 1.2) chassisVerdict = "Chassis is armored.";
+
   if (adherence > 90 && integrity > 1.0) {
     return {
       verdict: 'ON TRACK',
-      text: "Volume and Structure are balanced. Maintain course."
+      text: "Volume and Structure are balanced. Maintain course.",
+      chassis: chassisVerdict
     };
   }
   
   if (adherence < 80 && vetoes > 2) {
     return {
       verdict: 'POSITIVE DEVIATION',
-      text: "Volume is low, but chassis is protected. Trust the taper."
+      text: "Volume is low, but chassis is protected. Trust the taper.",
+      chassis: chassisVerdict
     };
   }
   
   return {
     verdict: 'RISK DETECTED',
-    text: "Discrepancy detected between intent and execution. Review metrics."
+    text: "Discrepancy detected between intent and execution. Review metrics.",
+    chassis: chassisVerdict
   };
 }
 
@@ -374,7 +420,8 @@ export function calculateValuation(sessions: PrototypeSessionDetail[]): Valuatio
     blueprintProbability,
     coachVerdict: verdictInfo.verdict,
     vetoCount: vetoes,
-    verdictText: verdictInfo.text
+    verdictText: verdictInfo.text,
+    chassisVerdict: verdictInfo.chassis
   };
 }
 

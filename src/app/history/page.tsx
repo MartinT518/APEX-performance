@@ -345,7 +345,9 @@ function HistoryContent() {
             </button>
           </div>
         ) : (
-          sessions.map((session) => (
+          sessions
+            .filter(s => !s.hidden)
+            .map((session) => (
             <button 
               key={session.id} 
               onClick={() => handleSelectSession(session)}

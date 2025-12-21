@@ -68,42 +68,72 @@ export async function loadSessionsWithVotes(
     if (filterSport !== 'ALL') {
       query = query.eq('sport_type', filterSport);
     }
-
     const { data: sessionLogs, error: logsError } = await query;
-
     if (logsError) throw logsError;
 
-    // Debug logging
-    logger.info(`Loaded ${sessionLogs?.length || 0} sessions for date range ${startDate} to ${endDate}, sport filter: ${filterSport}`);
-    if (sessionLogs && sessionLogs.length > 0) {
-      logger.info(`Session dates: ${sessionLogs.map((s: SessionLog) => s.session_date).join(', ')}`);
-    }
+    // Fetch all monitoring data for the range at once
+    const { data: monitoringData, error: monitoringError } = await supabase
+      .from('daily_monitoring')
+      .select('*')
+      .eq('user_id', userId)
+      .gte('date', startDate)
+      .lte('date', endDate);
 
-    const sessionsWithVotes: SessionWithVotes[] = await Promise.all(
-      (sessionLogs || []).map(async (log: SessionLog) => {
-        const [votesResult, monitoringResult] = await Promise.all([
-          supabase
-            .from('agent_votes')
-            .select('*')
-            .eq('session_id', log.id)
-            .order('created_at', { ascending: true }),
-          supabase
-            .from('daily_monitoring')
-            .select('*')
-            .eq('user_id', userId)
-            .eq('date', log.session_date)
-            .maybeSingle()
-        ]);
+    if (monitoringError) throw monitoringError;
 
-        return {
-          ...log,
-          votes: (votesResult.data as AgentVote[]) || [],
-          dailyMonitoring: monitoringResult.data as DailyMonitoring | null
-        };
-      })
-    );
+    // Fetch all votes for these sessions
+    const sessionIds = (sessionLogs || []).map(log => log.id);
+    const { data: allVotes, error: votesError } = sessionIds.length > 0 
+      ? await supabase.from('agent_votes').select('*').in('session_id', sessionIds)
+      : { data: [], error: null };
 
-    return sessionsWithVotes;
+    if (votesError) throw votesError;
+
+    // Create a map for quick access
+    const monitoringMap = new Map(monitoringData?.map(m => [m.date, m]) || []);
+    const votesBySession = new Map<string, AgentVote[]>();
+    (allVotes || []).forEach(vote => {
+      const existing = votesBySession.get(vote.session_id) || [];
+      existing.push(vote as AgentVote);
+      votesBySession.set(vote.session_id, existing);
+    });
+
+    const sessionsWithVotes: SessionWithVotes[] = (sessionLogs || []).map(log => ({
+      ...log,
+      votes: votesBySession.get(log.id) || [],
+      dailyMonitoring: monitoringMap.get(log.session_date) as DailyMonitoring | null
+    }));
+
+    // CRITICAL: Synthesis of 'Virtual' Strength Sessions
+    // If a day has a strength_session in monitoring but NO session log of type STRENGTH,
+    // we inject a virtual session so the valuation engine can see the chassis data.
+    monitoringData?.forEach(m => {
+      if (m.strength_session) {
+        const hasSession = sessionsWithVotes.some(s => s.session_date === m.date && s.sport_type === 'STRENGTH');
+        if (!hasSession && (filterSport === 'ALL' || filterSport === 'STRENGTH')) {
+          const isMobility = m.strength_tier === 'Mobility' || !m.strength_tier;
+          sessionsWithVotes.push({
+            id: `virtual-${m.date}`,
+            session_date: m.date,
+            sport_type: 'STRENGTH',
+            duration_minutes: 45, 
+            source: 'manual_upload',
+            metadata: { 
+              virtual: true, 
+              hidden: isMobility, // Hide mobility/stretching from training log
+              strengthTier: m.strength_tier,
+              activityName: isMobility ? `Audit: Maintenance` : `Audit: ${m.strength_tier} Lift` 
+            },
+            created_at: m.updated_at || m.date,
+            votes: [], 
+            dailyMonitoring: m as DailyMonitoring
+          });
+        }
+      }
+    });
+
+    // Re-sort and filter out hidden sessions for the UI
+    return sessionsWithVotes.sort((a, b) => b.session_date.localeCompare(a.session_date));
   } catch (err) {
     logger.error('Failed to load session history', err);
     throw err;

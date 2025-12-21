@@ -106,7 +106,7 @@ export async function persistFuelingLog(
         date,
         fueling_logged: true,
         fueling_carbs_per_hour: carbsPerHour,
-        fueling_gi_distress: giDistress,
+        fueling_gi_distress: Math.max(1, giDistress), // Solve 400 error: gi must be >= 1
       }, {
         onConflict: 'user_id,date',
       });
@@ -122,4 +122,3 @@ export async function persistFuelingLog(
     return { success: false, error: 'An error occurred while saving' };
   }
 }
-
