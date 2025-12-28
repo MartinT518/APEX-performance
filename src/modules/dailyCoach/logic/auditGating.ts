@@ -1,7 +1,9 @@
 export interface AuditGatingInput {
   niggleScore: number | null;
+  strengthSessionDone: boolean | null;
   strengthTier: string | null;
   lastRunDuration: number;
+  daysSinceLastLift?: number; // Optional historical context
   fuelingTarget: number | null;
   fuelingCarbsPerHour: number | null;
   fuelingGiDistress: number | null;
@@ -18,7 +20,7 @@ export interface AuditGatingOutput {
  * 
  * Rules:
  * - Niggle: Always required (blocking)
- * - Strength: Always required (blocking)
+ * - Strength: Required if no lift in last 7 days. If lifted recently, it becomes optional.
  * - Fueling: Required if lastRunDuration > 90 OR fuelingTarget > 90
  *   - Must have both carbs_per_hour AND gi_distress
  * 
@@ -27,8 +29,10 @@ export interface AuditGatingOutput {
 export function checkAuditGating(input: AuditGatingInput): AuditGatingOutput {
   const { 
     niggleScore, 
+    strengthSessionDone,
     strengthTier, 
     lastRunDuration, 
+    daysSinceLastLift = 999, // Default to a high number if not provided
     fuelingTarget, 
     fuelingCarbsPerHour, 
     fuelingGiDistress 
@@ -43,9 +47,13 @@ export function checkAuditGating(input: AuditGatingInput): AuditGatingOutput {
     if (!auditType) auditType = 'NIGGLE';
   }
   
-  // Check strength (always required)
-  if (!strengthTier || strengthTier === 'NONE') {
-    missingInputs.push('Strength tier');
+  // Check strength
+  // Rule: Required if never lifted today AND (daysSinceLastLift >= 7)
+  const isStrengthMissing = strengthSessionDone === null || strengthSessionDone === undefined;
+  const isStrengthRequired = daysSinceLastLift >= 7;
+
+  if (isStrengthMissing && isStrengthRequired) {
+    missingInputs.push('Strength status');
     if (!auditType) auditType = 'STRENGTH';
   }
   
@@ -68,4 +76,5 @@ export function checkAuditGating(input: AuditGatingInput): AuditGatingOutput {
     auditType
   };
 }
+
 

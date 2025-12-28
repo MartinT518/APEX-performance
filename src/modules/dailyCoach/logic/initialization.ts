@@ -11,7 +11,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 /**
  * Initializes DailyCoach: loads profile and Garmin client
  */
-export async function initializeDailyCoach(): Promise<{
+export async function initializeDailyCoach(skipLogin: boolean = true): Promise<{
   profile: IPhenotypeProfile | null;
   garminClient: GarminClient | null;
 }> {
@@ -29,16 +29,17 @@ export async function initializeDailyCoach(): Promise<{
   
   let garminClient: GarminClient | null = null;
   
-  if (email && password) {
+  if (!skipLogin && email && password) {
     try {
       garminClient = new GarminClient({ email, password });
       await garminClient.login();
       logger.info("✅ Garmin Client Initialized & Logged In");
     } catch (err) {
-      // Don't log error details that might contain credentials
       logger.warn("⚠️ Garmin Login Failed (Running in Offline Mode)");
       garminClient = null;
     }
+  } else if (email && password) {
+    logger.info("ℹ️ Garmin Login Deferred (Lazy Initialization Mode)");
   } else {
     logger.info("ℹ️ No Garmin Credentials found. Running in Simulation Mode.");
   }

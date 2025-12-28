@@ -10,6 +10,22 @@ export interface IGarminConfig {
 // Utility for delays
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+interface ExtendedGarminConnect {
+  getHeartRate?: (date: Date) => Promise<{ restingHeartRate?: number }>;
+  getSleepData?: (date: Date) => PromiseLike<{
+    dailySleepDTO: {
+      sleepTimeSeconds?: number;
+      sleepStartTimestampGMT: number;
+      sleepEndTimestampGMT: number;
+      sleepScores?: { overall?: { value: number } };
+    };
+  }>;
+  getHrvData?: (date: Date) => Promise<{
+    hrvSummary?: { lastNightAvg: number };
+    lastNightAvg?: number;
+  }>;
+}
+
 export class GarminClient {
   private client: GarminConnect;
   private maxRetries = 3;
@@ -88,5 +104,85 @@ export class GarminClient {
         return null;
       }
     }, 'getActivityDetails');
+  }
+
+  async getWellnessData(date: string): Promise<any> {
+    return this.callWithRetry(async () => {
+      try {
+        // Use type safe interface
+        const client = this.client as unknown as ExtendedGarminConnect;
+        
+        // Create Date object for library methods
+        const dateObj = new Date(date);
+
+        // 1. Fetch RHR
+        // Try built-in method first, or fallback if needed
+        let rhr = null;
+        if (client.getHeartRate) {
+           const hrData = await client.getHeartRate(dateObj);
+           rhr = hrData?.restingHeartRate;
+        }
+
+        // 2. Fetch HRV
+        // Endpoint: /hrv-service/hrv/daily/{date}
+        let hrv = null;
+        try {
+           // Try library method first if available (future proofing)
+           if (client.getHrvData) {
+              const hrvData = await client.getHrvData(dateObj);
+              hrv = hrvData?.hrvSummary?.lastNightAvg || hrvData?.lastNightAvg;
+           } else {
+              logger.debug(`No getHrvData method available, skipping HRV for ${date}`);
+           }
+        } catch (err) {
+            logger.warn(`Failed to fetch HRV data for ${date}`, err);
+        }
+
+        // 3. Fetch Sleep
+        // Try built-in method first
+        let sleepSeconds = null;
+        let sleepScore = null;
+        
+        try {
+          if (client.getSleepData) {
+            const sleepData = await client.getSleepData(dateObj);
+            if (sleepData) {
+               sleepSeconds = sleepData.dailySleepDTO?.sleepTimeSeconds || 
+                              (sleepData.dailySleepDTO?.sleepEndTimestampGMT - sleepData.dailySleepDTO?.sleepStartTimestampGMT) ||
+                              null;
+               sleepScore = sleepData.dailySleepDTO?.sleepScores?.overall?.value || null;
+            }
+          }
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+             if (errMsg.includes('<!DOCTYPE') || errMsg.includes('<html')) {
+                 logger.warn(`Failed to fetch sleep data for ${date}: HTML Error`);
+            } else {
+                 logger.warn(`Failed to fetch sleep data for ${date}`, errMsg.substring(0, 200));
+            }
+        }
+
+        return {
+          date,
+          rhr,
+          hrv,
+          sleepSeconds,
+          sleepScore
+        };
+
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
+           throw new Error('RATE_LIMITED');
+        }
+        
+         if (errorMessage.includes('<!DOCTYPE') || errorMessage.includes('<html')) {
+             logger.warn(`Failed to fetch wellness data for ${date}: HTML Error`);
+        } else {
+             logger.warn(`Failed to fetch wellness data for ${date}`, errorMessage.substring(0, 200));
+        }
+        return null;
+      }
+    }, 'getWellnessData');
   }
 }

@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger';
 import { sessionResultToLogData } from '@/modules/dailyCoach/logic/persistence';
 import type { SessionProcessingResult } from '@/modules/dailyCoach/logic/sessionProcessor';
 import type { IGarminActivity } from '@/types/garmin';
+import { CadenceLockDetector } from '@/modules/kill/logic/cadenceLock';
 
 /**
  * Syncs Garmin activities to session_logs table
@@ -221,6 +222,35 @@ export async function syncGarminSessionsToDatabase(
           protocol = { main: exercises };
         }
 
+        // Check for Cadence Lock (LLM Signal Denoising)
+        let integrity = { status: 'VALID' as any, confidence: 1.0, reason: 'Synced from Garmin', flags: [] as string[] };
+        
+        // Only check for Running activities with sufficient data
+        if (sportType === 'RUNNING' && stream.dataPoints.length > 300) { // > 5 mins
+           try {
+             // Take a 60s slice from the middle of the run to avoid warmup assertions
+             const midIndex = Math.floor(stream.dataPoints.length / 2);
+             const sampleWindow = stream.dataPoints.slice(midIndex, midIndex + 60).map(p => ({
+               timestamp: new Date(p.timestamp).toISOString(),
+               hr: p.heartRate || 0,
+               cadence: p.cadence || 0
+             }));
+
+             if (sampleWindow.length >= 30) {
+                const analysis = await CadenceLockDetector.detectCadenceLock(sampleWindow);
+                if (analysis.is_cadence_lock) {
+                  integrity.status = 'CORRUPTED' as any; // Cast to satisfy type checker if string literal not in enum logic
+                  integrity.confidence = Math.max(0, 100 - analysis.confidence) / 100;
+                  integrity.reason = `Cadence Lock Detected: ${analysis.explanation}`;
+                  integrity.flags.push('CADENCE_LOCK');
+                  logger.warn(`Cadence Lock detected for session ${activity.activityId}: ${analysis.explanation}`);
+                }
+             }
+           } catch (err) {
+             logger.warn('Cadence Lock check failed', err);
+           }
+        }
+
         // Create processing result
         const processingResult: SessionProcessingResult = {
           points: stream.dataPoints,
@@ -230,6 +260,7 @@ export async function syncGarminSessionsToDatabase(
             originalPointCount: stream.dataPoints.length,
             flaggedIndices: []
           },
+          integrity, 
           metadata: {
             dataSource: 'GARMIN',
             activityId: `${activity.activityId}`,
@@ -239,6 +270,7 @@ export async function syncGarminSessionsToDatabase(
             avgPace,
             protocol // Add extracted protocol
           }
+
         };
 
         // Convert to session log data
@@ -325,4 +357,91 @@ function mapGarminSportType(activityType: string): 'RUNNING' | 'CYCLING' | 'STRE
   }
   return 'OTHER';
 }
+
+/**
+ * Syncs Garmin wellness data (HRV, RHR) to daily_monitoring table
+ */
+export async function syncGarminWellnessToDatabase(
+  garminClient: GarminClient | null,
+  startDate: string,
+  endDate: string,
+  userId: string
+): Promise<{ synced: number; errors: number }> {
+  if (!garminClient) {
+    return { synced: 0, errors: 0 };
+  }
+
+  try {
+    const supabase = createServerClient();
+    const dates = getDatesInRange(new Date(startDate), new Date(endDate));
+    let synced = 0;
+    let errors = 0;
+
+    for (const date of dates) {
+      const dateStr = date.toISOString().split('T')[0];
+      try {
+        // Add delay between requests
+        if (synced > 0) await new Promise(res => setTimeout(res, 2000));
+
+        const wellness = await garminClient.getWellnessData(dateStr);
+        
+        // Check if any wellness data exists
+        if (wellness && (wellness.hrv !== null || wellness.rhr !== null || wellness.sleepSeconds !== null)) {
+            // Check if entry exists to perform safe update (preserve manual logs)
+            const { data: existing } = await supabase
+                .from('daily_monitoring')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('date', dateStr)
+                .maybeSingle() as any;
+
+            const updateData = {
+                hrv: wellness.hrv,
+                rhr: wellness.rhr,
+                sleep_seconds: wellness.sleepSeconds,
+                sleep_score: wellness.sleepScore,
+                updated_at: new Date().toISOString()
+            };
+
+            if (existing) {
+                const { error } = await supabase
+                    .from('daily_monitoring')
+                    .update(updateData as never)
+                    .eq('id', existing.id);
+                if (!error) synced++; else errors++;
+            } else {
+                const { error } = await supabase
+                    .from('daily_monitoring')
+                    .insert({
+                        user_id: userId,
+                        date: dateStr,
+                        ...updateData
+                    } as never);
+                if (!error) synced++; else errors++;
+            }
+            if (synced > 0 && synced % 5 === 0) logger.info(`Synced wellness for ${synced} days...`);
+        }
+      } catch (err) {
+        logger.warn(`Failed to sync wellness for ${dateStr}`, err);
+        errors++;
+      }
+    }
+    
+    return { synced, errors };
+  } catch (err) {
+    logger.error('Wellness sync failed', err);
+    return { synced: 0, errors: 1 };
+  }
+}
+
+function getDatesInRange(startDate: Date, endDate: Date) {
+    const dates = [];
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+        dates.push(new Date(currentDate));
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+    return dates;
+}
+
 

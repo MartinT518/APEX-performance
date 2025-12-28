@@ -12,7 +12,7 @@ export interface PrototypeSessionDetail {
   id: number;
   day: string;
   title: string;
-  type: 'KEY' | 'REST' | 'REC' | 'STR' | 'EXEC' | 'SUB';
+  type: 'KEY' | 'REST' | 'REC' | 'STR' | 'EXEC' | 'SUB' | 'EXPL';
   load: 'LOW' | 'MED' | 'EXTREME' | number; // Number for actual load in history
   duration: string;
   objective: string;

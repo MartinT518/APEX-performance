@@ -49,3 +49,19 @@ credentials/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local configuration and tools
+/.cursor
+/memory
+
+# local data dumps and logs
+garmin_log*.txt
+garmin_*.json
+debug_*.json
+check_*.ts
+garbage/
+
+# security analysis
+SECURITY_ANALYSIS.md
+SECURITY_IMPLEMENTATION_SUMMARY.md
+

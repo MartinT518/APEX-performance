@@ -25,7 +25,19 @@ export interface IWorkout {
   type: WorkoutType;
   primaryZone: IntensityZone;
   durationMinutes: number;
+  distanceKm?: number; // Added for volume tracking
   structure: IWorkoutStructure;
+  fuelingContext?: 'FASTED' | 'FUELED' | 'RACE_PRACTICE';
+  prehabDrills?: string[];
+  nutritionPlan?: {
+    dailyCalories: number;
+    macros: { carbs: number; protein: number; fat: number };
+    contextual: { preWorkout: string; intraWorkout: string; postWorkout: string };
+  };
+  macroTargets?: {
+    caloricIntake: number;
+    focus: string;
+  };
   notes?: string;
   constraints?: {
     cadenceTarget?: number; // e.g., >175 spm

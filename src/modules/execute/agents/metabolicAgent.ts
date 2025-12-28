@@ -76,6 +76,13 @@ export const evaluateMetabolicState = (input: ISessionSummary['metabolic']): IAg
   // 3. AMBER VETO: Decoupling (Cardiac Drift)
   const MAX_DECOUPLING = 5.0; // 5%
   
+  const fuelingRecommendation = (durationMin: number, phaseNumber: number): 'FASTED' | 'FUELED' | 'RACE_PRACTICE' => {
+    if (aerobicDecoupling > MAX_DECOUPLING) return 'FUELED'; // Force fueled if heart is struggling
+    if (phaseNumber >= 2) return 'RACE_PRACTICE'; // Intense phases demand 90g/hr fueling
+    if (durationMin < 75 && phaseNumber === 1) return 'FASTED'; // Training metabolic flexibility
+    return 'FUELED';
+  };
+
   if (aerobicDecoupling > MAX_DECOUPLING) {
     flaggedMetrics.push({
       metric: 'aerobicDecoupling',
@@ -87,10 +94,11 @@ export const evaluateMetabolicState = (input: ISessionSummary['metabolic']): IAg
       agentId: 'metabolic_agent',
       vote: 'AMBER',
       confidence: 0.85,
-      reason: 'Metabolic Efficiency Compromised: Significant cardiac drift detected.',
+      reason: 'Metabolic Efficiency Compromised: Significant cardiac drift detected. FORCING FUELED context to protect heart.',
       flaggedMetrics,
-      score: 65 // Moderate risk due to decoupling
-    };
+      score: 65,
+      suggestedFueling: 'FUELED'
+    } as any;
   }
 
   // 4. GREEN
@@ -104,12 +112,15 @@ export const evaluateMetabolicState = (input: ISessionSummary['metabolic']): IAg
   }
   riskScore = Math.min(20, riskScore); // Cap at 20 for GREEN
   
+  const suggestedFueling = fuelingRecommendation(input.sessionPoints.length, 1); // Mock duration/phase for now
+
   return {
     agentId: 'metabolic_agent',
     vote: 'GREEN',
     confidence: 1.0,
     reason: 'Metabolic State Nominal.',
     flaggedMetrics: [],
-    score: Math.max(80, 100 - riskScore) // GREEN = 80-100 score (low risk)
-  };
+    score: Math.max(80, 100 - riskScore), // GREEN = 80-100 score (low risk)
+    suggestedFueling
+  } as any;
 };

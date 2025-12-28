@@ -78,7 +78,7 @@ function LabContent() {
 
       // Merge with actual Lab Data if available
       if (labData.integrityData && labData.integrityData.length > 0) {
-        const actualValues = labData.integrityData.map(week => {
+        const actualValues = labData.integrityData.map((week: {runningVolume: number; tonnage: number}) => {
           const ratio = week.runningVolume > 0 ? (week.tonnage / 1000) / (week.runningVolume / 10) : 0;
           return Math.round(Math.min(150, (ratio / 0.8) * 100));
         });
@@ -93,18 +93,19 @@ function LabContent() {
       setGutData(labData.gutIndexData || []);
 
       if (labData.decouplingData && labData.decouplingData.length > 0) {
-        const decVals = labData.decouplingData.slice(-7).map(d => d.decoupling);
-        while (decVals.length < 7) decVals.unshift(0);
+        const decVals = labData.decouplingData.map((d: {decoupling: number}) => d.decoupling);
         setDecouplingData(decVals);
       } else {
-        setDecouplingData(Array(7).fill(0));
+        // Provide a subtle baseline for the War Room aesthetic if no data, but kept empty for chart
+        setDecouplingData([]);
       }
 
       if (labData.longrunEfficiencyData && labData.longrunEfficiencyData.length > 0) {
-        const maxEff = Math.max(...labData.longrunEfficiencyData.map(d => d.efficiency), 1);
-        const effVals = labData.longrunEfficiencyData.slice(-10).map(d => 
+        const maxEff = Math.max(...labData.longrunEfficiencyData.map((d: {efficiency: number}) => d.efficiency), 1);
+        const effVals = labData.longrunEfficiencyData.slice(-10).map((d: {efficiency: number}) => 
           Math.round(Math.min(100, (d.efficiency / maxEff) * 100))
         );
+
         while (effVals.length < 10) effVals.unshift(0);
         setLongrunEfficiencyData(effVals);
       } else {
@@ -126,8 +127,9 @@ function LabContent() {
     );
   }
 
-  const gutCheckScore = gutData.filter(d => d.isSuccessful).length;
-  const showSafetyWarning = integrityRatio < 1.0;
+  const gutCheckScore = gutData.filter(d => d.hasData && d.carbsPerHour >= 80 && d.giDistress < 3).length;
+  const currentRatioValue = integrityRatio;
+  const showSafetyWarning = currentRatioValue < 1.0;
 
   return (
     <div className="space-y-6 pb-24 p-4 animate-in fade-in duration-500">
@@ -141,55 +143,64 @@ function LabContent() {
         </div>
       </header>
 
-      {/* 1. ROAD TO 2:30 VALUATION MODULE */}
-      <div className={`relative overflow-hidden rounded-2xl border-2 p-6 transition-all shadow-2xl ${
-        coachVerdict === 'ON TRACK' ? 'bg-emerald-500/10 border-emerald-500/50' : 
-        coachVerdict === 'POSITIVE DEVIATION' ? 'bg-amber-500/10 border-amber-500/50' :
-        'bg-red-500/10 border-red-500/50'
-      }`}>
-        <div className="absolute top-0 right-0 p-8 opacity-10">
-          {coachVerdict === 'ON TRACK' ? <ShieldCheck className="w-32 h-32" /> : <AlertTriangle className="w-32 h-32" />}
+      {/* 2. VOLUME VALUATION MODULE */}
+      <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-6 shadow-xl">
+        <div className="flex justify-between items-center">
+          <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+            <TrendingUp className="w-3.5 h-3.5 text-blue-500" /> Campaign Volume Valuation
+          </h3>
+          <span className="text-[10px] text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20 uppercase">
+            Strategic Ceiling Analysis
+          </span>
         </div>
-        
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <h3 className={`text-4xl font-black tracking-tighter ${
-              coachVerdict === 'ON TRACK' ? 'text-emerald-400' : 
-              coachVerdict === 'POSITIVE DEVIATION' ? 'text-amber-400' : 
-              'text-red-400'
-            }`}>
-              {coachVerdict}
-            </h3>
-            <p className="text-slate-200 font-medium text-lg max-w-md italic leading-tight">
-              "{verdictText}"
-            </p>
-            {coachVerdict === 'POSITIVE DEVIATION' && (
-              <div className="bg-amber-500/20 text-amber-300 text-[10px] px-2 py-1 rounded inline-block font-mono border border-amber-500/30">
-                STRATAGEM: VETO OVERRIDE ACTIVE ({vetoCount} VETOES)
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] font-bold uppercase tracking-tighter text-slate-500">
+                <span>Capped Volume (Chassis)</span>
+                <span className="text-white font-mono">{Math.round(integrityRatio < 0.8 ? 80 : 120)} km/week</span>
               </div>
-            )}
+              <div className="h-2 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all duration-1000 ${integrityRatio < 0.8 ? 'bg-red-500' : 'bg-emerald-500'}`}
+                  style={{ width: `${(Math.min(integrityRatio, 1.2) / 1.5) * 100}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] font-bold uppercase tracking-tighter text-slate-500 font-mono">
+                <span>Potential Volume (Engine)</span>
+                <span className="text-blue-400">160 km/week</span>
+              </div>
+              <div className="h-2 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500/30 rounded-full w-full"
+                />
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-400 italic">
+              {integrityRatio < 0.8 
+                ? "Your Engine is capable of 160km, but your Chassis (Strength) is restricting you to 80km to prevent injury." 
+                : "Chassis strength is nominal. You have unlocked 100% of blueprint volume."}
+            </p>
           </div>
 
-          <div className="w-full md:w-64 space-y-3">
-             <div className="flex justify-between items-end">
-                <span className="text-xs text-slate-400 font-bold uppercase">Campaign Adherence</span>
-                <span className="text-3xl font-black text-white font-mono">{adherenceScore.toFixed(0)}%</span>
-             </div>
-             <div className="h-3 bg-slate-950 rounded-full border border-slate-800 overflow-hidden p-0.5">
-                <div 
-                  className={`h-full rounded-full transition-all duration-1000 ${
-                    adherenceScore > 90 ? 'bg-emerald-500' : adherenceScore > 80 ? 'bg-amber-500' : 'bg-red-500'
-                  }`}
-                  style={{ width: `${adherenceScore}%` }}
-                />
-             </div>
+          <div className="bg-slate-950/50 rounded-xl p-4 border border-slate-800/50 flex flex-col items-center justify-center text-center space-y-2">
+            <div className={`text-4xl font-black font-mono ${integrityRatio < 0.8 ? 'text-red-500' : 'text-emerald-500'}`}>
+              -{Math.round(integrityRatio < 0.8 ? 40 : 0)}%
+            </div>
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+              Volume Opportunity Cost
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* 2. CHASSIS INTEGRITY & DECOUPLING CLUSTER */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* INTEGRITY RATIO UPGRADE */}
         <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-5 backdrop-blur-md shadow-xl">
           <div className="flex justify-between items-start">
@@ -234,14 +245,14 @@ function LabContent() {
           </div>
           
           {showSafetyWarning && (
-            <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex gap-4 items-center animate-pulse">
+            <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex gap-4 items-center animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.1)]">
               <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" />
               <div>
                 <p className="text-[10px] text-red-400 font-black leading-tight uppercase tracking-tight">
                   Structural Deficit Detected
                 </p>
-                <p className="text-[9px] text-red-500/80 font-bold uppercase leading-none mt-1">
-                  Increase Tonnage or Cap Mileage immediately.
+                <p className="text-[11px] text-red-500 font-bold uppercase leading-none mt-1">
+                  Structural Deficit. Increase Tonnage or Cap Mileage.
                 </p>
               </div>
             </div>
@@ -253,8 +264,11 @@ function LabContent() {
           <div className="flex justify-between items-center text-xs font-black text-slate-500 uppercase tracking-widest">
              <h3 className="flex items-center gap-2"><Activity className="w-3.5 h-3.5 text-blue-500" /> Decoupling Analysis</h3>
              <div className="flex items-center gap-1.5 text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-               {decouplingData.length > 1 ? (() => {
+               {decouplingData.length > 0 ? (() => {
                  const y = decouplingData;
+                 if (y.length === 0) return <span className="text-[9px]">NO RUN DATA</span>;
+                 if (y.length === 1) return <span className="text-[10px] uppercase font-mono">Baseline: {y[0].toFixed(1)}%</span>;
+                 
                  const first = y[0];
                  const last = y[y.length - 1];
                  const slope = (last - first) / Math.max(1, y.length - 1);
@@ -263,7 +277,7 @@ function LabContent() {
                  return (
                    <>
                      <ArrowUpRight className={`w-3 h-3 transition-transform ${isImproving ? 'rotate-90 text-emerald-400' : 'text-red-400'}`} />
-                     <span className="font-mono text-[10px]">{(slope).toFixed(2)}% / RUN</span>
+                     <span className="font-mono text-[10px]">Efficiency {isImproving ? 'improving' : 'declining'} by {Math.abs(slope).toFixed(2)}% / run</span>
                    </>
                  );
                })() : <span className="text-[9px]">CALIBRATING...</span>}
@@ -276,21 +290,22 @@ function LabContent() {
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-20 overflow-visible" preserveAspectRatio="none">
                 {(() => {
                   const y = decouplingData;
-                  const maxVal = Math.max(...y, 10);
-                  const step = 100 / (y.length - 1);
+                  const maxVal = Math.max(...y, 8);
+                  const n = y.length;
+                  const step = 100 / (n - 1);
                   const points = y.map((v, i) => ({
                     x: i * step,
                     y: 100 - (v / maxVal * 100)
                   }));
                   
                   // Linear Regression for Trend Line
-                  const n = y.length;
                   const sumX = points.reduce((acc, p) => acc + p.x, 0);
                   const sumY = points.reduce((acc, p) => acc + p.y, 0);
                   const sumXY = points.reduce((acc, p) => acc + p.x * p.y, 0);
                   const sumX2 = points.reduce((acc, p) => acc + p.x * p.x, 0);
                   
-                  const m = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+                  const denominator = (n * sumX2 - (sumX * sumX));
+                  const m = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator;
                   const b = (sumY - m * sumX) / n;
                   
                   const x1 = 0;
@@ -311,17 +326,21 @@ function LabContent() {
               </svg>
             )}
 
-            {decouplingData.map((val, i) => (
+            {decouplingData.length > 0 ? decouplingData.map((val, i) => (
               <div key={i} className="flex-1 bg-slate-800/20 rounded-t-md relative group h-full">
                 <div 
                   className="absolute bottom-0 w-full bg-blue-500/40 rounded-t-md transition-all duration-1000" 
-                  style={{ height: `${Math.min(100, val * 8)}%` }}
+                  style={{ height: `${Math.min(100, Math.max(5, val * 10))}%` }}
                 />
                 <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded font-mono border border-slate-700 z-30">
                   {val.toFixed(1)}%
                 </div>
               </div>
-            ))}
+            )) : (
+              <div className="w-full flex items-center justify-center text-slate-700 font-mono text-[10px] uppercase italic">
+                No activity metrics found in range
+              </div>
+            )}
           </div>
           <div className="text-[9px] text-slate-600 font-black flex justify-between uppercase tracking-tighter">
              <span>Efficiency Trend Analysis</span>
@@ -334,48 +353,145 @@ function LabContent() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 space-y-5 backdrop-blur-md shadow-xl">
           <div className="flex justify-between items-center text-xs font-black text-slate-500 uppercase tracking-widest">
-            <h3 className="flex items-center gap-2"><Flame className="w-3.5 h-3.5 text-orange-500" /> Gut Efficiency Heatmap</h3>
-            <div className="font-mono text-white bg-slate-800 px-2 py-1 rounded border border-slate-700">
-               SCORE: <span className={gutCheckScore >= 8 ? 'text-emerald-400' : 'text-orange-400'}>{gutCheckScore}</span>/12
+            <h3 className="flex items-center gap-2"><Flame className="w-3.5 h-3.5 text-orange-500" /> Fuel Performance Nexus</h3>
+             <div className="font-mono text-white bg-slate-800 px-2 py-1 rounded border border-slate-700">
+               {(() => {
+                 // Calculate Correlation
+                 const validPoints = gutData.filter(d => d.hasData && d.decoupling !== null && d.decoupling !== undefined);
+                 if (validPoints.length < 3) return <span className="text-slate-500">Need more data</span>;
+                 
+                 const n = validPoints.length;
+                 const sumX = validPoints.reduce((acc, p) => acc + p.carbsPerHour, 0);
+                 const sumY = validPoints.reduce((acc, p) => acc + (p.decoupling || 0), 0);
+                 const sumXY = validPoints.reduce((acc, p) => acc + p.carbsPerHour * (p.decoupling || 0), 0);
+                 const sumX2 = validPoints.reduce((acc, p) => acc + p.carbsPerHour * p.carbsPerHour, 0);
+                 
+                 const numerator = (n * sumXY) - (sumX * sumY);
+                 const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * validPoints.reduce((acc, p) => acc + (p.decoupling || 0)**2, 0) - sumY * sumY));
+                 const r = denominator === 0 ? 0 : numerator / denominator;
+                 
+                 return (
+                   <span className={r < -0.3 ? 'text-emerald-400' : 'text-slate-400'}>
+                     r = {r.toFixed(2)} {r < -0.3 ? '(Strong)' : ''}
+                   </span>
+                 );
+               })()}
             </div>
           </div>
-
-          <div className="grid grid-cols-6 gap-3">
-            {Array.from({ length: 12 }).map((_, i) => {
-              const data = gutData[i];
-              return (
-                <div 
-                  key={i} 
-                  className={`aspect-square rounded-lg border-2 flex items-center justify-center transition-all duration-500 relative group ${
-                    !data ? 'bg-slate-800/10 border-slate-700/20' :
-                    !data.hasData ? 'bg-slate-800/40 border-slate-500/50' :
-                    data.isSuccessful ? 'bg-emerald-500/20 border-emerald-500 shadow-[inset_0_0_15px_rgba(16,185,129,0.1)]' :
-                    'bg-red-500/20 border-red-500 shadow-[inset_0_0_15px_rgba(239,68,68,0.1)]'
-                  }`}
-                >
-                  {data ? (
-                    <>
-                      <div className={`text-[10px] font-black font-mono ${
-                        !data.hasData ? 'text-slate-500' :
-                        data.isSuccessful ? 'text-emerald-400' : 'text-red-400'
-                      }`}>
-                        {data.hasData ? data.carbsPerHour : '?'}
-                      </div>
-                      <div className="opacity-0 group-hover:opacity-100 absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[8px] px-2 py-1 rounded font-mono border border-slate-700 z-30 whitespace-nowrap">
-                        {data.date}: {data.hasData ? `${data.carbsPerHour}g/hr | GI: ${data.giDistress}` : 'Audit Missing'}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="w-1 h-1 bg-slate-700/50 rounded-full" />
-                  )}
-                </div>
-              );
-            })}
+          
+          <div className="text-lg font-black text-white italic tracking-tight">
+             Output: More Fuel = {(() => {
+                 const validPoints = gutData.filter(d => d.hasData && d.decoupling !== null);
+                 if (validPoints.length < 3) return 'Unknown data';
+                 
+                 // Quick slope check
+                 const n = validPoints.length;
+                 const sumX = validPoints.reduce((acc, p) => acc + p.carbsPerHour, 0);
+                 const sumY = validPoints.reduce((acc, p) => acc + (p.decoupling || 0), 0);
+                 const sumXY = validPoints.reduce((acc, p) => acc + p.carbsPerHour * (p.decoupling || 0), 0);
+                 const sumX2 = validPoints.reduce((acc, p) => acc + p.carbsPerHour * p.carbsPerHour, 0);
+                 
+                 const slope = (n * sumX2 - sumX * sumX) === 0 ? 0 : ((n * sumXY) - (sumX * sumY)) / (n * sumX2 - sumX * sumX);
+                 
+                 return slope < 0 ? <span className="text-emerald-500">Less Drift (Good)</span> : <span className="text-orange-500">Unclear Impact</span>;
+             })()}
           </div>
-          <p className="text-[10px] text-slate-500 font-bold italic mt-2 uppercase tracking-tighter">
-            *Critical Success: {'>'}80g Carbs/hr + None/Minimal GI Distress (Scale 1-3).
+
+          <div className="h-48 relative border-l border-b border-slate-700/50">
+            {/* Axis Labels */}
+            <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] text-slate-500 font-bold uppercase">Carbs (g/hr)</div>
+            <div className="absolute -left-8 top-1/2 -translate-y-1/2 -rotate-90 text-[9px] text-slate-500 font-bold uppercase">Drift (%)</div>
+
+            <svg className="w-full h-full overflow-visible">
+               {/* Reference Grid */}
+               <line x1="0%" y1="20%" x2="100%" y2="20%" stroke="#334155" strokeWidth="1" strokeDasharray="2 2" className="opacity-20" />
+               <line x1="0%" y1="60%" x2="100%" y2="60%" stroke="#334155" strokeWidth="1" strokeDasharray="2 2" className="opacity-20" />
+               
+               {/* Data Points */}
+               {gutData.filter(d => d.hasData && d.decoupling !== null).map((point, i) => {
+                 // Scales: X = 0-120g, Y = -2% to 10% (Clamped)
+                 const x = Math.min(100, Math.max(0, (point.carbsPerHour / 120) * 100));
+                 
+                 // Y-Scale: 10% drift is 0 (bottom), -2% drift is 100 (top) -> Range 12
+                 // Let's make 0% drift be at 80% height. 10% drift at 0% height.
+                 const drift = point.decoupling || 0;
+                 // y = 100 - ((drift + 2) / 12 * 100) ??
+                 // Let's calculate simple linear scale: 
+                 // Top (0%) = -2 drift (exceptional)
+                 // Bottom (100%) = 10 drift (bad)
+                 const y = Math.min(100, Math.max(0, ((drift + 2) / 14) * 100)); // Map -2..12 -> 0..100
+                 // But wait, SVG Y=0 is top. So lower drift (-2) should be Y=0? 
+                 // Let's flip it. High drift (bad) = Bottom. Low drift (good) = Top.
+                 // Actually standard graphs: Top Y is high value.
+                 // Y Axis = Drift %. Top = 10%, Bottom = 0%.
+                 // Let's do standard: Bottom (100%) = -2%, Top (0%) = 12%
+                 const yScale = (val: number) => 100 - ((val + 2) / 14 * 100); 
+                 
+                 const plotY = yScale(drift);
+
+                 return (
+                   <g key={i} className="group">
+                     <circle 
+                       cx={`${x}%`} 
+                       cy={`${plotY}%`} 
+                       r="4" 
+                       className={`${point.giDistress < 3 ? 'fill-emerald-500/80 stroke-emerald-400' : 'fill-red-500/80 stroke-red-400'} transition-all duration-300 hover:r-6 cursor-pointer`}
+                       strokeWidth="1"
+                     />
+                     {/* Tooltip */}
+                     <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                       <rect x={`${x}%`} y={`${plotY - 15}%`} width="80" height="25" rx="4" fill="#1e293b" className="-translate-x-1/2" />
+                       <text x={`${x}%`} y={`${plotY - 15}%`} dy="16" textAnchor="middle" className="text-[9px] fill-white font-mono">
+                         {point.carbsPerHour}g | {drift.toFixed(1)}%
+                       </text>
+                     </g>
+                   </g>
+                 );
+               })}
+               
+               {/* Trend Line (if points > 2) */}
+               {(() => {
+                 const validPoints = gutData.filter(d => d.hasData && d.decoupling !== null);
+                 if (validPoints.length < 3) return null;
+                 
+                 const n = validPoints.length;
+                 const sumX = validPoints.reduce((acc, p) => acc + p.carbsPerHour, 0);
+                 const sumY = validPoints.reduce((acc, p) => acc + (p.decoupling || 0), 0);
+                 const sumXY = validPoints.reduce((acc, p) => acc + p.carbsPerHour * (p.decoupling || 0), 0);
+                 const sumX2 = validPoints.reduce((acc, p) => acc + p.carbsPerHour * p.carbsPerHour, 0);
+                 
+                 const slope = (n * sumX2 - sumX * sumX) === 0 ? 0 : ((n * sumXY) - (sumX * sumY)) / (n * sumX2 - sumX * sumX);
+                 const intercept = (sumY - slope * sumX) / n;
+                 
+                 // Calculate start (0g) and end (120g) points
+                 const startDrift = intercept;
+                 const endDrift = slope * 120 + intercept;
+                 
+                 const yScale = (val: number) => 100 - ((val + 2) / 14 * 100);
+                 
+                 const y1 = yScale(startDrift);
+                 const y2 = yScale(endDrift);
+                 
+                 return (
+                   <line 
+                     x1="0%" y1={`${y1}%`} 
+                     x2="100%" y2={`${y2}%`} 
+                     stroke="#60a5fa" 
+                     strokeWidth="2" 
+                     strokeDasharray="4 4" 
+                     className="opacity-50" 
+                   />
+                 );
+               })()}
+            </svg>
+          </div>
+          
+          <p className="text-[10px] text-slate-500 font-bold italic mt-4 uppercase tracking-tighter flex justify-between">
+            <span>* Correlation Analysis (6 Mo. Lookback)</span>
+            <span>Target: Neg. Slope (More Fuel = Less Drift)</span>
           </p>
         </div>
+
 
         {/* 5. TACTICAL OVERVIEW as Campaign Stats */}
         <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-6 flex flex-col justify-between backdrop-blur-md shadow-xl">
@@ -411,7 +527,6 @@ function LabContent() {
               </div>
            </div>
         </div>
-      </div>
       </div>
     </div>
   );

@@ -40,7 +40,7 @@ export interface IDataIntegrityVote extends IAgentVote {
   status: IntegrityStatus;
 }
 
-export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power';
+export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
 
 export interface IStructuralInput {
   niggleScore: number; // 0-10

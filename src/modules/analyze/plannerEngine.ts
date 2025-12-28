@@ -16,7 +16,7 @@ interface TacticalAnalysis {
 /**
  * Analyzes the last 14 sessions to extract behavioral habits and readiness.
  */
-function analyzeTacticalHistory(sessions: PrototypeSessionDetail[]): TacticalAnalysis {
+export function analyzeTacticalHistory(sessions: PrototypeSessionDetail[]): TacticalAnalysis {
   const last14 = sessions.slice(-14);
   
   let totalVolume = 0;
@@ -166,4 +166,56 @@ export function generateStrategicPlan(history: PrototypeSessionDetail[], today: 
   }
 
   return plan;
+}
+/**
+ * Generates a single, data-driven workout suggestion for today.
+ */
+export function calculateTacticalSuggestion(history: PrototypeSessionDetail[], today: Date): IWorkout {
+  const analysis = analyzeTacticalHistory(history);
+  const phase = getCurrentPhase(today);
+  const dayOfWeek = today.getDay();
+  
+  // Progression Logic
+  let loadMultiplier = 1.0;
+  if (analysis.niggleScore > 3) loadMultiplier = 0.5; // Heavy deload
+  else if (analysis.integrityRatio < 0.8) loadMultiplier = 0.8; // Chassis recovery
+  else if (analysis.adherenceScore > 90) loadMultiplier = 1.05; // Progressive overload
+
+  const targetWeeklyVolume = Math.min(phase.maxWeeklyVolume, analysis.avgWeeklyVolume * loadMultiplier);
+  
+  // Standard daily volume distribution (approximate)
+  const duration = (targetWeeklyVolume * 0.15) * 6; // 15% of weekly volume, 6min/km
+  
+  let workoutType: 'RUN' | 'STR' | 'REC' | 'REST' = 'RUN';
+  let title = 'Aerobic Base Build';
+  let zone: IntensityZone = phase.maxAllowedZone;
+  let mainSet = 'Steady Z2 Endurance';
+
+  if (dayOfWeek === 0) {
+    title = 'Long Aerobic Progressor';
+    mainSet = 'Mitochondrial Expansion (Long Run)';
+  } else if (analysis.habitualStrengthDays.includes(dayOfWeek)) {
+    workoutType = 'STR';
+    title = 'Chassis Hardening';
+    mainSet = 'Structural Integrity Session';
+  } else if (dayOfWeek === 1 || dayOfWeek === 5) {
+    workoutType = 'REC';
+    title = 'Emerald Recovery';
+    mainSet = 'Non-Impact Metabolic Flush';
+  }
+
+  return {
+    id: 'w_tactical',
+    date: today.toISOString().split('T')[0],
+    type: workoutType,
+    primaryZone: zone,
+    durationMinutes: Math.floor(duration),
+    structure: { mainSet },
+    constraints: {
+      cadenceTarget: 175,
+      hrTarget: phase.hrCap,
+      fuelingTarget: duration > 90 ? 60 : 30
+    },
+    explanation: `Tactical suggestion based on current load (${analysis.avgWeeklyVolume.toFixed(1)}km/week) and niggle score (${analysis.niggleScore}/10). Phase: ${phase.name}.`
+  };
 }

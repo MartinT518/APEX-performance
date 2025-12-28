@@ -8,7 +8,7 @@ import { logger } from "@/lib/logger";
 import { persistSessionLog, sessionResultToLogData } from "@/modules/dailyCoach/logic/persistence";
 import { persistAgentVotes } from "@/modules/dailyCoach/logic/votePersistence";
 import type { SessionProcessingResult } from "@/modules/dailyCoach/logic/sessionProcessor";
-import { syncGarminSessionsToDatabase } from "@/modules/monitor/ingestion/garminSync";
+import { syncGarminSessionsToDatabase, syncGarminWellnessToDatabase } from "@/modules/monitor/ingestion/garminSync";
 import { syncGarminSessionsToDatabaseMCP } from "@/modules/monitor/ingestion/garminSyncMCP";
 import { GarminClient } from "@/modules/monitor/ingestion/garminClient";
 import { performDailyAudit } from "@/modules/dailyCoach/logic/audit";
@@ -17,7 +17,10 @@ import { buildDailySnapshot } from "@/modules/dailyCoach/logic/snapshotBuilder";
 import { resolveDailyStatus } from "@/modules/review/logic/statusResolver";
 import { mapRowToProfile } from "@/modules/monitor/phenotypeStore/logic/profileMapper";
 import { DEFAULT_CONFIG } from "@/modules/monitor/phenotypeStore/logic/constants";
+import { calculateTacticalSuggestion } from "@/modules/analyze/plannerEngine";
 import type { IPhenotypeProfile } from "@/types/phenotype";
+import { loadSessionsWithVotes } from "./history/logic/sessionLoader";
+import { sessionWithVotesToPrototype } from "@/types/prototype";
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -46,7 +49,7 @@ export async function runCoachAnalysis(providedUserId?: string) {
       .from('phenotype_profiles')
       .select('*')
       .eq('user_id', userId)
-      .maybeSingle();
+      .maybeSingle() as any;
 
     if (profileError) {
       logger.error('Failed to load profile', profileError);
@@ -65,27 +68,29 @@ export async function runCoachAnalysis(providedUserId?: string) {
       .select('*')
       .eq('user_id', userId)
       .eq('date', today)
-      .maybeSingle();
+      .maybeSingle() as any;
 
     if (monitoringError) {
       logger.error('Failed to load daily monitoring', monitoringError);
     }
 
     const niggleScore = dailyMonitoring?.niggle_score ?? null;
+    const strengthSessionDone = dailyMonitoring?.strength_session ?? null;
     const strengthTier = dailyMonitoring?.strength_tier ?? null;
     const fuelingCarbsPerHour = dailyMonitoring?.fueling_carbs_per_hour ?? null;
     const fuelingGiDistress = dailyMonitoring?.fueling_gi_distress ?? null;
-
+    
     // 2. Check snapshot cache first
     const snapshotResult = await loadDailySnapshot({ userId, date: today });
     if (snapshotResult.success && snapshotResult.snapshot) {
       const snapshot = snapshotResult.snapshot;
       // Check if inputs have changed (compare inputs_summary)
       const inputsMatch = snapshot.inputs_summary_jsonb && 
-        snapshot.inputs_summary_jsonb.niggle_score === niggleScore &&
-        snapshot.inputs_summary_jsonb.strength_tier === strengthTier &&
-        snapshot.inputs_summary_jsonb.fueling_carbs_per_hour === fuelingCarbsPerHour &&
-        snapshot.inputs_summary_jsonb.fueling_gi_distress === fuelingGiDistress;
+        (snapshot.inputs_summary_jsonb as any).niggle_score === niggleScore &&
+        (snapshot.inputs_summary_jsonb as any).strength_session === strengthSessionDone &&
+        (snapshot.inputs_summary_jsonb as any).strength_tier === strengthTier &&
+        (snapshot.inputs_summary_jsonb as any).fueling_carbs_per_hour === fuelingCarbsPerHour &&
+        (snapshot.inputs_summary_jsonb as any).fueling_gi_distress === fuelingGiDistress;
       
       if (inputsMatch) {
         logger.info("Using cached snapshot");
@@ -98,11 +103,11 @@ export async function runCoachAnalysis(providedUserId?: string) {
         return {
           success: true,
           decision: {
-            action: snapshot.final_workout_jsonb.isAdapted ? 'MODIFIED' : 'EXECUTED_AS_PLANNED',
+            action: (snapshot.final_workout_jsonb.isAdapted ? 'MODIFIED' : 'EXECUTED_AS_PLANNED') as 'MODIFIED' | 'EXECUTED_AS_PLANNED' | 'SKIPPED',
             originalWorkout: snapshot.final_workout_jsonb,
             finalWorkout: snapshot.final_workout_jsonb,
             reasoning: snapshot.reason,
-            modifications: [],
+            modifications: [] as string[],
             votes: snapshot.votes_jsonb,
             global_status: statusResult.global_status,
             reason: statusResult.reason,
@@ -119,8 +124,25 @@ export async function runCoachAnalysis(providedUserId?: string) {
         };
       }
     }
+    
+    // 3. Get last lift date and last run duration for audit check
+    const { data: lastStrengthSession } = await supabase
+      .from('daily_monitoring')
+      .select('date')
+      .eq('user_id', userId)
+      .eq('strength_session', true)
+      .order('date', { ascending: false })
+      .limit(1)
+      .limit(1)
+      .maybeSingle() as any;
 
-    // 3. Get last run duration for audit check
+    const lastLiftDate = lastStrengthSession?.date;
+    let daysSinceLastLift = 999;
+    if (lastLiftDate) {
+      const diff = new Date(today).getTime() - new Date(lastLiftDate).getTime();
+      daysSinceLastLift = Math.floor(diff / (1000 * 60 * 60 * 24));
+    }
+
     const { data: lastSession } = await supabase
       .from('session_logs')
       .select('duration_minutes')
@@ -128,21 +150,24 @@ export async function runCoachAnalysis(providedUserId?: string) {
       .eq('sport_type', 'RUNNING')
       .order('session_date', { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle() as any;
 
     const lastRunDuration = lastSession?.duration_minutes ?? 0;
 
     // 4. Perform Audit (using new audit gating)
     const auditInputs = {
       niggleScore,
+      strengthSessionDone,
       strengthTier,
       lastRunDuration,
+      daysSinceLastLift,
       fuelingTarget: null, // Will be determined from workout
       fuelingCarbsPerHour,
       fuelingGiDistress
     };
 
     // Initialize Garmin client for audit (if available)
+
     let garminClient: GarminClient | null = null;
     try {
       await DailyCoach.initialize();
@@ -199,63 +224,33 @@ export async function runCoachAnalysis(providedUserId?: string) {
       .eq('user_id', userId)
       .order('date', { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle() as any;
     
     if (baselineData) {
       currentHRV = baselineData.hrv ?? currentHRV;
       currentTonnage = baselineData.tonnage ? Number(baselineData.tonnage) : currentTonnage;
     }
-    
-    const { simulation, baselines } = await DailyCoach.runAnalysis(currentHRV, currentTonnage);
 
-    // 7. Generate Decision
-    const { getCurrentPhase } = await import('@/modules/analyze/blueprintEngine');
-    const phase = getCurrentPhase(new Date());
-    const thresholdHR = currentProfile.config.threshold_hr_known || 175;
+    // LOAD LAST 14 DAYS OF HISTORY FOR TACTICAL ANALYSIS
+    const historyStart = new Date();
+    historyStart.setDate(historyStart.getDate() - 14);
+    const historySessions = await loadSessionsWithVotes(
+      userId,
+      { start: historyStart.toISOString().split('T')[0], end: today },
+      'ALL'
+    );
+    const prototypeHistory = historySessions.map(s => 
+      sessionWithVotesToPrototype(s, s.dailyMonitoring || null)
+    );
     
-    const baseZone = phase.maxAllowedZone;
-    
-    // Calculate weekly volume from DB (no zustand)
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - 7);
-    const { data: weeklySessions } = await supabase
-      .from('session_logs')
-      .select('duration_minutes')
-      .eq('user_id', userId)
-      .eq('sport_type', 'RUNNING')
-      .gte('session_date', weekStart.toISOString().split('T')[0]);
-    
-    const currentWeeklyVolume = weeklySessions?.reduce((sum, s) => sum + (s.duration_minutes ?? 0), 0) ?? 0;
-    const currentMonthlyVolume = currentWeeklyVolume * 4.33;
-    
-    if (currentMonthlyVolume > phase.maxMonthlyVolume) {
-      logger.warn(`Volume cap exceeded: ${currentMonthlyVolume.toFixed(1)}km/month > ${phase.maxMonthlyVolume}km/month`);
-    }
-    
-    const mockTodayWorkout: IWorkout = {
-        id: 'w_today',
-        date: today,
-        type: 'RUN',
-        primaryZone: baseZone,
-        durationMinutes: 60,
-        structure: { mainSet: baseZone === 'Z2_ENDURANCE' ? "Easy Base Build" : baseZone === 'Z4_THRESHOLD' ? "3x15min Threshold" : "Workout" },
-        constraints: {
-          cadenceTarget: 175,
-          hrTarget: phase.hrCap ? phase.hrCap : { 
-            min: thresholdHR - 7, 
-            max: thresholdHR + 7 
-          },
-          fuelingTarget: 30
-        },
-        explanation: currentProfile.is_high_rev 
-          ? phase.phaseNumber === 1 
-            ? "Aerobic Base Phase: Building mitochondrial density through Zone 2 volume."
-            : "Chassis and Engine are Green. Time to build lactate clearance."
-          : "Threshold intervals to build aerobic capacity."
-    };
+    const { simulation, baselines } = await DailyCoach.runAnalysis(currentHRV, currentTonnage, prototypeHistory);
+
+    // 7. Generate Daily Suggestion
+    const now = new Date();
+    const todaysWorkout = calculateTacticalSuggestion(prototypeHistory, now);
 
     // Generate decision
-    const decision = await DailyCoach.generateDecision(mockTodayWorkout, {
+    const decision = await DailyCoach.generateDecision(todaysWorkout, {
       sessionPoints: sessionPoints,
       hrvBaseline: baselines.hrvBaseline,
       currentHRV: currentHRV,
@@ -272,7 +267,7 @@ export async function runCoachAnalysis(providedUserId?: string) {
     let sessionId: string | undefined;
     if (processingResult && (sessionPoints.length > 0 || sessionMetadata.dataSource !== 'NONE')) {
       try {
-        const sessionLogData = sessionResultToLogData(processingResult, mockTodayWorkout.durationMinutes);
+        const sessionLogData = sessionResultToLogData(processingResult, todaysWorkout.durationMinutes);
         const sessionResult = await persistSessionLog(sessionLogData);
         
         if (sessionResult.success && sessionResult.sessionId) {
@@ -520,6 +515,7 @@ export async function syncGarminSessions(
     // Try MCP client first (token persistence, efficient queries)
     // Falls back to npm client if MCP fails
     let result;
+    let garminClient: GarminClient | null = null;
     try {
       logger.info("Attempting sync with MCP client (token persistence, efficient date-range queries)...");
       result = await syncGarminSessionsToDatabaseMCP(startDate, endDate, userId, force);
@@ -533,7 +529,6 @@ export async function syncGarminSessions(
       logger.info("Waiting 10 seconds before npm client login to avoid rate limiting...");
       await new Promise(resolve => setTimeout(resolve, 10000));
 
-      let garminClient: GarminClient | null = null;
       try {
         garminClient = new GarminClient({ email, password });
         await garminClient.login();
@@ -558,6 +553,30 @@ export async function syncGarminSessions(
       
       result = await syncGarminSessionsToDatabase(garminClient, startDate, endDate, userId, force);
     }
+
+    // --- WELLNESS SYNC (Run regardless of Activity Sync method) ---
+    // If we used MCP, garminClient is null, so we need to init it now.
+    // If we used fallback, garminClient is already ready.
+    try {
+        if (!garminClient) {
+            logger.info("Initializing Garmin Client for Wellness Sync (post-MCP)...");
+            // Add a small delay if we just ran MCP to be safe
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            garminClient = new GarminClient({ email, password });
+            await garminClient.login();
+        }
+
+        if (garminClient) {
+            logger.info("Syncing wellness data (HRV/RHR/Sleep)...");
+            const wellnessResult = await syncGarminWellnessToDatabase(garminClient, startDate, endDate, userId);
+            logger.info(`Wellness sync result: ${wellnessResult.synced} synced, ${wellnessResult.errors} errors`);
+        }
+    } catch (wErr) {
+        logger.error("Wellness sync failed (non-blocking)", wErr);
+        // Don't fail the whole request if just wellness fails, unless it was a login failure indicating bad creds/rate limit? 
+        // Typically we want to return partial success.
+    }
+
         
     return {
       success: true,
@@ -591,7 +610,7 @@ export async function backfillDailyMonitoring() {
   // If not authenticated via session, try to get user_id from existing profile
   let targetUserId = userId;
   if (!targetUserId) {
-    const { data: profiles } = await supabase.from('phenotype_profiles').select('user_id').limit(1);
+    const { data: profiles } = await supabase.from('phenotype_profiles').select('user_id').limit(1) as any;
     targetUserId = profiles?.[0]?.user_id;
   }
 
@@ -632,8 +651,8 @@ export async function backfillDailyMonitoring() {
     };
   });
 
-  const { error } = await supabase
-    .from('daily_monitoring')
+  const { error } = await (supabase
+    .from('daily_monitoring') as any)
     .upsert(updates, { onConflict: 'user_id,date' });
 
   if (error) {

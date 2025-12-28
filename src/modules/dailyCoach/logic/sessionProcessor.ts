@@ -166,8 +166,9 @@ export async function processSessionData(
   // 1. HighRevFilter (phenotype-aware) - FIRST
   // 2. Dropouts detection
   // 3. Clipping detection
-  // 4. Cadence lock (with phenotype awareness)
-  
+  // 4. Cadence lock
+    // ARCHITECTURAL PRIORITY: HighRevFilter MUST execute before standard noise filters.
+    // This ensures legitimate high-HR physiology (phenotype-aware) isn't killed as noise.
   const highRevDiagnostics = validateHighRevPhysiology(sessionPoints, profile);
   logger.info(`HighRev Filter: ${highRevDiagnostics.status} (${highRevDiagnostics.validPointCount}/${highRevDiagnostics.originalPointCount} valid)`);
   

@@ -79,15 +79,31 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
       value: niggleScore,
       threshold: 3
     });
+
+    // Physio Mode escalation: Niggle > 5 mandates zero running
+    const isPhysioMode = niggleScore > 5;
+    const prehabDrills = [];
     
+    // Inject Prehab based on location (assuming we have access to it, if not, general prehab)
+    // NOTE: In a real app, 'niggleLocation' would be in the input. 
+    // For now, we'll use a generic approach or assume it's passed.
+    const niggleLocation = (input as any).niggleLocation || 'Achilles';
+
+    if (niggleLocation === 'Achilles') prehabDrills.push('3x15 Eccentric Calf Raises');
+    if (niggleLocation === 'Knee') prehabDrills.push('3x30s Spanish Squat Holds', '3x15 TKEs');
+
     return {
       agentId: 'structural_agent',
       vote: 'RED',
       confidence: 1.0,
-      reason: 'Mechanical Integrity Compromised: Pain detected above threshold.',
+      reason: isPhysioMode 
+        ? 'PHYSIO MODE: Critical mechanical distress detected. Zero running permitted. Focus on mandatory rehab protocol.' 
+        : 'Mechanical Integrity Compromised: Pain detected above threshold. Session Vetod to prevent injury escalation.',
       flaggedMetrics,
-      score: 0 // RED = 0 score (maximum risk)
-    };
+      score: 0,
+      suggestedPrehab: prehabDrills,
+      physioMode: isPhysioMode
+    } as any;
   }
 
   // 2. Volume Cap Check: Strength-to-Volume Ratio
@@ -139,6 +155,8 @@ export const evaluateStructuralHealth = async (input: ISessionSummary['structura
       value: daysSinceLastLift,
       threshold: MAX_DAYS_WITHOUT_LIFT
     });
+
+    const isHighTier = tonnageTier === 'power' || tonnageTier === 'strength' || tonnageTier === 'explosive';
 
     return {
       agentId: 'structural_agent',

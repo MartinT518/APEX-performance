@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { persistNiggleScore, persistStrengthSession, persistFuelingLog } from './monitorStore/logic/persistence';
 import { loadTodayMonitoringFromSupabase } from './monitorStore/logic/loader';
 import { getTodayDate, getDaysSinceLastLift } from './monitorStore/logic/dateUtils';
+import { checkAuditGating } from '@/modules/dailyCoach/logic/auditGating';
 
 export type TonnageTier = 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
 
@@ -17,6 +18,10 @@ interface MonitorState {
       carbsPerHour: number; // g/hr
       giDistress: number; // 1-10
     } | null;
+    hrv: number | null;
+    rhr: number | null;
+    sleepSeconds: number | null;
+    sleepScore: number | null;
     lastAuditTime: number | null;
   };
 
@@ -31,7 +36,9 @@ interface MonitorState {
   getDaysSinceLastLift: () => number;
   getLastLiftTier: () => Promise<TonnageTier | undefined>;
   calculateCurrentWeeklyVolume: () => Promise<number>;
+
   loadTodayMonitoring: (userId?: string) => Promise<void>;
+  checkGatekeepers: () => import('@/modules/dailyCoach/logic/auditGating').AuditGatingOutput;
 }
 
 export const useMonitorStore = create<MonitorState>()(
@@ -41,6 +48,10 @@ export const useMonitorStore = create<MonitorState>()(
         niggleScore: null,
         strengthSession: null,
         fuelingLog: null,
+        hrv: null,
+        rhr: null,
+        sleepSeconds: null,
+        sleepScore: null,
         lastAuditTime: null,
       },
 
@@ -110,9 +121,14 @@ export const useMonitorStore = create<MonitorState>()(
             niggleScore: null,
             strengthSession: null,
             fuelingLog: null,
+            hrv: null,
+            rhr: null,
+            sleepSeconds: null,
+            sleepScore: null,
             lastAuditTime: null,
           },
         }),
+
 
       getDaysSinceLastLift: () => {
         const state = get();
@@ -136,7 +152,8 @@ export const useMonitorStore = create<MonitorState>()(
             .not('strength_tier', 'is', null)
             .order('date', { ascending: false })
             .limit(1)
-            .maybeSingle();
+            .limit(1)
+            .maybeSingle() as any;
 
           if (!data?.strength_tier) return undefined;
 
@@ -173,13 +190,15 @@ export const useMonitorStore = create<MonitorState>()(
             .eq('user_id', userId)
             .eq('sport_type', 'RUNNING')
             .gte('session_date', weekStartStr)
-            .lte('session_date', new Date().toISOString().split('T')[0]);
+            .gte('session_date', weekStartStr)
+            .lte('session_date', new Date().toISOString().split('T')[0]) as any;
 
           if (!sessions) return 0;
 
+
           // Convert duration to km (approximate: 1km ≈ 5 minutes for easy pace)
           // This is a rough estimate; in production, use actual distance from metadata if available
-          const totalMinutes = sessions.reduce((sum, s) => sum + (s.duration_minutes || 0), 0);
+          const totalMinutes = sessions.reduce((sum: number, s: any) => sum + (s.duration_minutes || 0), 0);
           const weeklyKm = totalMinutes / 5; // Rough conversion
 
           return Math.round(weeklyKm * 10) / 10; // Round to 1 decimal
@@ -197,6 +216,52 @@ export const useMonitorStore = create<MonitorState>()(
             todayEntries: data,
           });
         }
+
+        // Also load last lift date for historical context
+        try {
+          const { supabase } = await import('@/lib/supabase');
+          let targetUserId = userId;
+          if (!targetUserId) {
+            const { data: session } = await supabase.auth.getSession();
+            targetUserId = session?.session?.user?.id;
+          }
+
+          if (targetUserId) {
+            const { data: lastLift } = await supabase
+              .from('daily_monitoring')
+              .select('date')
+              .eq('user_id', targetUserId)
+              .eq('strength_session', true)
+              .order('date', { ascending: false })
+              .limit(1)
+              .limit(1)
+              .maybeSingle() as any;
+
+            if (lastLift?.date) {
+              set({ lastLiftDate: lastLift.date });
+            }
+          }
+        } catch (err) {
+          const { logger } = await import('@/lib/logger');
+          logger.warn('Failed to load last lift date in loadTodayMonitoring', err);
+        }
+      },
+
+      checkGatekeepers: () => {
+        const state = get();
+        const { todayEntries, lastLiftDate } = state;
+        const daysSinceLastLift = getDaysSinceLastLift(lastLiftDate);
+        
+        return checkAuditGating({
+          niggleScore: todayEntries.niggleScore,
+          strengthSessionDone: todayEntries.strengthSession?.performed ?? null,
+          strengthTier: todayEntries.strengthSession?.tonnageTier ?? null,
+          lastRunDuration: 0, // Client side check can't rely on last run duration easily
+          daysSinceLastLift,
+          fuelingTarget: null,
+          fuelingCarbsPerHour: todayEntries.fuelingLog?.carbsPerHour ?? null,
+          fuelingGiDistress: todayEntries.fuelingLog?.giDistress ?? null
+        });
       },
     }),
     {
@@ -204,3 +269,4 @@ export const useMonitorStore = create<MonitorState>()(
     }
   )
 );
+

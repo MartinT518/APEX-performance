@@ -12,6 +12,7 @@ import type { AnalysisResult } from './dailyCoach/logic/analysis';
 import type { SessionProcessingResult } from './dailyCoach/logic/sessionProcessor';
 import type { AuditStatus } from './dailyCoach/logic/audit';
 import type { SessionIntegrity } from '@/types/agents';
+import type { PrototypeSessionDetail } from '@/types/prototype';
 
 /**
  * THE DAILY COACH (Process Orchestrator)
@@ -22,8 +23,8 @@ export class DailyCoach {
   private static garminClient: GarminClient | null = null;
   
   // Step 1: Initialization & Phenotype Load
-  static async initialize(): Promise<IPhenotypeProfile | null> {
-    const { profile, garminClient } = await initializeDailyCoach();
+  static async initialize(skipLogin: boolean = true): Promise<IPhenotypeProfile | null> {
+    const { profile, garminClient } = await initializeDailyCoach(skipLogin);
     this.garminClient = garminClient;
     return profile;
   }
@@ -40,8 +41,8 @@ export class DailyCoach {
   }
 
   // Step 4: Analysis (Baselines & Blueprint)
-  static async runAnalysis(currentHRV: number, currentTonnage: number): Promise<AnalysisResult> {
-    return runAnalysis(currentHRV, currentTonnage);
+  static async runAnalysis(currentHRV: number, currentTonnage: number, history: PrototypeSessionDetail[] = []): Promise<AnalysisResult> {
+    return runAnalysis(currentHRV, currentTonnage, history);
   }
 
   // Step 5 & 6: Agent Evaluation & Coach Synthesis

@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { TonnageTier } from '../monitorStore';
+import type { TonnageTier } from '../../monitorStore';
 import { dbToTonnageTier } from './tierMapper';
 import type { Database } from '@/types/database';
 import { logger } from '@/lib/logger';
@@ -16,6 +16,10 @@ export interface TodayMonitoringData {
     carbsPerHour: number;
     giDistress: number;
   } | null;
+  hrv: number | null;
+  rhr: number | null;
+  sleepSeconds: number | null;
+  sleepScore: number | null;
   lastAuditTime: number | null;
 }
 
@@ -41,7 +45,7 @@ export async function loadTodayMonitoringFromSupabase(
     }
 
     // Load today's monitoring entry
-    const { data, error } = await supabase
+    const { data: rawData, error } = await supabase
       .from('daily_monitoring')
       .select('*')
       .eq('user_id', targetUserId)
@@ -50,9 +54,11 @@ export async function loadTodayMonitoringFromSupabase(
 
     if (error) throw error;
 
-    if (!data) {
+    if (!rawData) {
       return null;
     }
+
+    const data = rawData as any;
 
     // Map database tier to TonnageTier
     const tonnageTier = data.strength_tier ? dbToTonnageTier(data.strength_tier) : undefined;
@@ -67,11 +73,16 @@ export async function loadTodayMonitoringFromSupabase(
         carbsPerHour: data.fueling_carbs_per_hour,
         giDistress: data.fueling_gi_distress ?? 0,
       } : null,
+      hrv: data.hrv,
+      rhr: data.rhr,
+      sleepSeconds: data.sleep_seconds,
+      sleepScore: data.sleep_score,
       lastAuditTime: data.updated_at ? new Date(data.updated_at).getTime() : null,
     };
+
+
   } catch (err) {
     logger.warn('Failed to load daily monitoring from Supabase', err);
     return null;
   }
 }
-

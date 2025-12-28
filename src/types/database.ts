@@ -81,6 +81,10 @@ export interface Database {
           fueling_logged: boolean;
           fueling_carbs_per_hour: number | null;
           fueling_gi_distress: number | null;
+          hrv: number | null;
+          rhr: number | null;
+          sleep_seconds: number | null;
+          sleep_score: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -95,6 +99,10 @@ export interface Database {
           fueling_logged?: boolean;
           fueling_carbs_per_hour?: number | null;
           fueling_gi_distress?: number | null;
+          hrv?: number | null;
+          rhr?: number | null;
+          sleep_seconds?: number | null;
+          sleep_score?: number | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -109,10 +117,16 @@ export interface Database {
           fueling_logged?: boolean;
           fueling_carbs_per_hour?: number | null;
           fueling_gi_distress?: number | null;
+          hrv?: number | null;
+          rhr?: number | null;
+          sleep_seconds?: number | null;
+          sleep_score?: number | null;
           created_at?: string;
           updated_at?: string;
         };
+
       };
+
       daily_decision_snapshot: {
         Row: {
           id: string;

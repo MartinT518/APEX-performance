@@ -14,6 +14,7 @@ export interface StatusResolverOutput {
     fueling: { vote: string; color: string; label: string };
   };
   substitutions_suggested: boolean;
+  confidenceScore: number;
 }
 
 /**
@@ -95,7 +96,7 @@ export function resolveDailyStatus(input: StatusResolverInput): StatusResolverOu
   // GO: All GREEN or only AMBER votes
   else {
     global_status = 'GO';
-    const amberVotes = votes.filter(v => v.vote === 'AMBER' || v.vote === 'YELLOW');
+    const amberVotes = votes.filter(v => v.vote === 'AMBER');
     if (amberVotes.length > 0) {
       const amberReason = amberVotes[0].reason;
       reason = `CAUTION: ${amberReason}`;
@@ -112,7 +113,8 @@ export function resolveDailyStatus(input: StatusResolverInput): StatusResolverOu
       metabolic: formatVote(metabolicVote),
       fueling: formatVote(fuelingVote)
     },
-    substitutions_suggested
+    substitutions_suggested,
+    confidenceScore: 0.85
   };
 }
 

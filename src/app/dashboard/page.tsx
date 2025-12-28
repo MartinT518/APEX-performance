@@ -27,6 +27,74 @@ import { PostActionReport } from '@/components/shared/PostActionReport';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 
+import { BrainCircuit } from 'lucide-react';
+
+function BiometricIntelligenceCard() {
+  const [narrative, setNarrative] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadNarrative();
+  }, []);
+
+  const loadNarrative = async () => {
+    try {
+      setLoading(true);
+      const { getBiometricNarrative } = await import('./actions');
+      const result = await getBiometricNarrative();
+      if (result.success && result.narrative) {
+        setNarrative(result.narrative);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!narrative && !loading) return null;
+
+  return (
+    <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 animate-in fade-in slide-in-from-bottom-2">
+      <div className="flex items-center gap-2 mb-3">
+        <BrainCircuit className="w-4 h-4 text-violet-400" />
+        <span className="text-xs font-bold text-violet-400 uppercase tracking-widest">Physiological Intelligence</span>
+      </div>
+      
+      {loading ? (
+        <div className="flex gap-2 items-center text-xs text-slate-500 animate-pulse">
+          <div className="w-2 h-2 rounded-full bg-violet-400"></div>
+          Analyzing biometrics...
+        </div>
+      ) : (
+        <div className="space-y-3">
+             <div className="flex justify-between items-start">
+               <div className="text-sm text-white font-medium leading-relaxed max-w-[90%]">
+                 "{narrative.reasoning_string}"
+               </div>
+               <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${
+                   narrative.state_assessment === 'OPTIMAL' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                   narrative.state_assessment.includes('STRESS') ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                   'bg-amber-500/10 text-amber-400 border-amber-500/20'
+               }`}>
+                 {narrative.state_assessment.replace('_', ' ')}
+               </span>
+             </div>
+             
+             <div className="text-xs text-slate-400 bg-slate-950/50 p-3 rounded-lg border border-slate-800/50 italic">
+               "{narrative.physiological_story}"
+             </div>
+
+             <div className="flex gap-2 items-center">
+               <span className="text-[10px] text-slate-500 uppercase">Recommendation:</span>
+               <span className="text-xs text-white font-bold">{narrative.recommended_action}</span>
+             </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardContent() {
   const { todayEntries, setNiggleScore, logStrengthSession, logFueling, loadTodayMonitoring, getDaysSinceLastLift } = useMonitorStore();
   const { profile, loadProfile } = usePhenotypeStore();
@@ -41,12 +109,16 @@ function DashboardContent() {
   const [previousCertaintyScore, setPreviousCertaintyScore] = useState<number | null>(null);
   const [hrv, setHrv] = useState<number | null>(null);
   const [drift, setDrift] = useState<number | null>(null);
+  const [rhr, setRhr] = useState<number | null>(null);
+  const [sleepSeconds, setSleepSeconds] = useState<number | null>(null);
+  const [sleepScore, setSleepScore] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [fuelingCarbsPerHour, setFuelingCarbsPerHour] = useState<number | null>(null);
   const [fuelingGiDistress, setFuelingGiDistress] = useState<number | null>(null);
   const [lastRunDuration, setLastRunDuration] = useState<number>(0);
   const [valuation, setValuation] = useState<ValuationResult | null>(null);
   const [isChassisDirty, setIsChassisDirty] = useState(false);
+  const [auditStatus, setAuditStatus] = useState<'NOMINAL' | 'AUDIT_PENDING' | 'CAUTION'>('NOMINAL');
 
   // Load data on mount
   useEffect(() => {
@@ -56,10 +128,9 @@ function DashboardContent() {
     runInitialAnalysis();
   }, []);
 
-  // Sync niggle score from store
+  // Sync from Store to Local State
   useEffect(() => {
-    setNiggleScoreLocal(todayEntries.niggleScore || 0);
-    // Update lift status from store
+    if (todayEntries.niggleScore !== null) setNiggleScoreLocal(todayEntries.niggleScore);
     if (todayEntries.strengthSession?.performed && todayEntries.strengthSession?.tonnageTier) {
       const tier = todayEntries.strengthSession.tonnageTier;
       if (tier === 'maintenance') setLiftStatus('MAIN');
@@ -74,7 +145,13 @@ function DashboardContent() {
       setFuelingCarbsPerHour(todayEntries.fuelingLog.carbsPerHour);
       setFuelingGiDistress(todayEntries.fuelingLog.giDistress);
     }
+    // Sync Health Metrics
+    if (todayEntries.hrv) setHrv(todayEntries.hrv);
+    if (todayEntries.rhr) setRhr(todayEntries.rhr);
+    if (todayEntries.sleepSeconds) setSleepSeconds(todayEntries.sleepSeconds);
+    if (todayEntries.sleepScore) setSleepScore(todayEntries.sleepScore);
   }, [todayEntries]);
+
 
   // Use status from decision result (vote-driven) instead of hardcoded logic
   // Compute these values from analysisResult using useMemo to avoid recomputation issues
@@ -139,7 +216,7 @@ function DashboardContent() {
         .eq('user_id', userId)
         .order('date', { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .maybeSingle() as { data: any, error: any };
 
       if (baseline?.hrv) {
         setHrv(Number(baseline.hrv));
@@ -154,8 +231,8 @@ function DashboardContent() {
         .limit(1)
         .maybeSingle();
 
-      if (latestSession?.metadata) {
-        const metadata = latestSession.metadata as Record<string, unknown>;
+      if (latestSession && (latestSession as any).metadata) {
+        const metadata = (latestSession as any).metadata as Record<string, unknown>;
         // Extract decoupling from metadata if available
         const decoupling = metadata.decoupling as number | undefined;
         if (decoupling !== undefined) {
@@ -173,6 +250,14 @@ function DashboardContent() {
       const { data: session } = await supabase.auth.getSession();
       const userId = session?.session?.user?.id;
       const result = await runCoachAnalysis(userId);
+      
+      // Update Audit Status logic
+      if (result.auditStatus) {
+        setAuditStatus(result.auditStatus as any);
+      } else {
+        setAuditStatus('NOMINAL');
+      }
+
       if (result.success) {
         setAnalysisResult(result);
       }
@@ -266,6 +351,11 @@ function DashboardContent() {
       
       await logStrengthSession(performed, tier);
       
+      // Save Fueling Data
+      if (fuelingCarbsPerHour !== null) {
+        await logFueling(fuelingCarbsPerHour, fuelingGiDistress || 1);
+      }
+
       // Reload analysis to update Integrity Ratio
       await runInitialAnalysis();
       
@@ -348,22 +438,35 @@ function DashboardContent() {
       {showPAR && <PostActionReport onClose={() => setShowPAR(false)} />}
 
       {/* Header / Certainty */}
-      <div className="flex justify-between items-end">
-        <div>
-          <h2 className="text-slate-400 text-xs font-mono uppercase tracking-wider">Macro-Engine Probability</h2>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-white">{certaintyScore}%</span>
-            <span className="text-xs text-emerald-400 flex items-center gap-1">
+      <div className="flex justify-between items-start">
+        <div className="flex-1">
+          <h2 className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] mb-1 opacity-60">Macro-Engine Valuation</h2>
+          <div className="flex items-baseline gap-3">
+            <span className="text-4xl font-black text-white tracking-tighter italic">{certaintyScore}%</span>
+            <span className="text-xs text-emerald-500 font-bold flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
               <TrendingUp className="w-3 h-3" /> +{certaintyDelta}%
             </span>
           </div>
         </div>
-        {isHighRev && (
-          <div className="bg-slate-800 px-2 py-1 rounded text-[10px] font-mono text-slate-300 border border-slate-700 flex items-center gap-1">
-            <Activity className="w-3 h-3 text-emerald-500" />
-            HIGH-REV: ON
-          </div>
-        )}
+        <div className="flex gap-2">
+          {isHighRev && (
+            <div className="bg-slate-900 px-3 py-1.5 rounded-xl text-[10px] font-black text-emerald-500 border border-slate-800 flex items-center gap-1.5 shadow-xl">
+              <Activity className="w-3 h-3 animate-pulse" />
+              HIGH-REV
+            </div>
+          )}
+          <button 
+            onClick={() => {
+              setIsLoading(true);
+              runInitialAnalysis();
+            }}
+            disabled={isLoading}
+            className="bg-slate-900 p-2 rounded-xl border border-slate-800 text-slate-400 hover:text-emerald-500 hover:border-emerald-500/50 transition-all disabled:opacity-50 group shadow-xl"
+            title="Force Re-Analysis"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-emerald-500' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+          </button>
+        </div>
       </div>
 
       {/* GO / NO-GO STATUS */}
@@ -372,6 +475,8 @@ function DashboardContent() {
           ? 'bg-red-500/10 border-red-500 shadow-red-900/20'
           : isAdapted 
           ? 'bg-amber-500/10 border-amber-500 shadow-amber-900/20' 
+          : auditStatus === 'AUDIT_PENDING'
+          ? 'bg-slate-800/50 border-slate-500 shadow-slate-900/20 cursor-not-allowed opacity-75'
           : 'bg-emerald-500/10 border-emerald-500 shadow-emerald-900/20'
       }`}>
         <div className="flex items-center gap-3 mb-2">
@@ -379,11 +484,17 @@ function DashboardContent() {
             <AlertTriangle className="text-red-500" />
           ) : isAdapted ? (
             <AlertTriangle className="text-amber-500" />
+          ) : auditStatus === 'AUDIT_PENDING' ? (
+            <Activity className="text-slate-500 animate-pulse" />
           ) : (
             <CheckCircle2 className="text-emerald-500" />
           )}
           <h1 className="text-xl font-bold text-white tracking-tight">
-            STATUS: {globalStatus ?? 'GO'}
+            STATUS: {
+              globalStatus === 'SHUTDOWN' ? 'SHUTDOWN' : 
+              auditStatus === 'AUDIT_PENDING' ? 'INPUTS REQUIRED' :
+              globalStatus ?? 'GO'
+            }
           </h1>
         </div>
         <p className="text-sm text-slate-300">
@@ -416,6 +527,8 @@ function DashboardContent() {
         )}
       </div>
 
+      <BiometricIntelligenceCard />
+
       {/* CHASSIS vs ENGINE GAUGES */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
@@ -444,14 +557,21 @@ function DashboardContent() {
         <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
           <div className="flex items-center gap-2 mb-3">
             <Activity className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-bold text-slate-400">ENGINE</span>
+            <span className="text-xs font-bold text-slate-400">ENGINE (RHR: {rhr ?? '--'})</span>
           </div>
           <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
-            <div className="absolute top-0 left-0 h-full w-[92%] bg-emerald-500" />
+            <div 
+              className={`absolute top-0 left-0 h-full w-[92%] transition-all duration-500 ${
+                 !hrv ? 'bg-slate-600' :
+                 hrv < 35 ? 'bg-red-500' :
+                 hrv < 45 ? 'bg-amber-500' : 'bg-emerald-500'
+               }`} 
+               style={{ width: `${Math.min(100, (hrv ? (hrv / 80) : 0.6) * 100)}%` }}
+            />
           </div>
           <div className="mt-3 flex justify-between text-[10px] text-slate-500 font-mono">
-            <span>HRV: {hrv ? `+${Math.round(hrv - 50)}ms` : '+2ms'}</span>
-            <span>DRIFT: {drift ? `${drift.toFixed(1)}%` : '1.2%'}</span>
+            <span>HRV: {hrv ? `${Math.round(hrv)}ms` : '--'}</span>
+            <span>SLEEP: {sleepSeconds ? `${(sleepSeconds / 3600).toFixed(1)}h` : '--'} {sleepScore ? `(${sleepScore})` : ''}</span>
           </div>
         </div>
       </div>
@@ -507,6 +627,60 @@ function DashboardContent() {
                       : 'Cadence Target'}
                 </span>
               </div>
+
+              {workout.prehabDrills && workout.prehabDrills.length > 0 && (
+                <div className="mt-3 bg-slate-950/50 rounded-lg p-3 border border-slate-800 border-l-4 border-l-violet-500">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-violet-400 uppercase tracking-wider">Structural Integrity</span>
+                        <span className="text-[10px] text-slate-500 font-mono">PREHAB</span>
+                    </div>
+                    <ul className="space-y-1">
+                        {workout.prehabDrills.map((drill, idx) => (
+                            <li key={idx} className="text-[10px] text-slate-300 flex items-start gap-2">
+                                <span className="text-violet-500 font-bold">•</span>
+                                {drill}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+              )}
+              
+              {workout.nutritionPlan && (
+                <div className="mt-4 bg-slate-950/50 rounded-lg p-3 border border-slate-800 border-l-4 border-l-orange-500">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-orange-400 uppercase tracking-wider">Fueling Strategy</span>
+                        <span className="text-xs font-mono text-white">{workout.nutritionPlan.dailyCalories} kcal</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[10px] text-slate-400 font-mono mb-3">
+                        <div className="text-center bg-slate-900 rounded py-1">
+                             <span className="block text-slate-500">CARB</span>
+                             <span className="text-white">{workout.nutritionPlan.macros.carbs}g</span>
+                        </div>
+                        <div className="text-center bg-slate-900 rounded py-1">
+                             <span className="block text-slate-500">PRO</span>
+                             <span className="text-white">{workout.nutritionPlan.macros.protein}g</span>
+                        </div>
+                        <div className="text-center bg-slate-900 rounded py-1">
+                             <span className="block text-slate-500">FAT</span>
+                             <span className="text-white">{workout.nutritionPlan.macros.fat}g</span>
+                        </div>
+                    </div>
+                    <div className="space-y-1 text-[10px]">
+                        <div className="flex gap-2">
+                            <span className="text-orange-500 font-bold min-w-[35px]">PRE:</span>
+                            <span className="text-slate-300">{workout.nutritionPlan.contextual.preWorkout}</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <span className="text-orange-500 font-bold min-w-[35px]">INTRA:</span>
+                            <span className="text-slate-300">{workout.nutritionPlan.contextual.intraWorkout}</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <span className="text-orange-500 font-bold min-w-[35px]">POST:</span>
+                            <span className="text-slate-300">{workout.nutritionPlan.contextual.postWorkout}</span>
+                        </div>
+                    </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -540,6 +714,16 @@ function DashboardContent() {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Did you lift today?</span>
+            {getDaysSinceLastLift() < 7 && liftStatus === 'NONE' && (
+              <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 uppercase tracking-wider">
+                Optional: Lifted {getDaysSinceLastLift()}d ago
+              </span>
+            )}
+            {getDaysSinceLastLift() >= 7 && liftStatus === 'NONE' && (
+              <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 uppercase tracking-wider">
+                Required: {getDaysSinceLastLift()}d since last lift
+              </span>
+            )}
           </div>
           {/* Granular Strength Tonnage Input */}
           <div className="grid grid-cols-2 gap-2">
@@ -553,6 +737,7 @@ function DashboardContent() {
              >
                Maintenance
              </button>
+
              <button 
                 onClick={() => handleLiftStatusChange('HYPER')}
                 className={`text-xs py-2 rounded border ${
@@ -590,6 +775,39 @@ function DashboardContent() {
              </p>
           )}
 
+          {/* Fueling Input */}
+          <div className="pt-4 border-t border-slate-800">
+            <div className="flex justify-between text-sm mb-2">
+              <span className="text-white">Run Fueling (Carbs/hr)</span>
+              <span className="font-mono font-bold text-orange-400">
+                {(fuelingCarbsPerHour || 0) > 0 ? `${fuelingCarbsPerHour}g` : '-'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+               <input 
+                type="range" 
+                min="0" 
+                max="120" 
+                step="5"
+                value={fuelingCarbsPerHour || 0} 
+                onChange={(e) => {
+                  setFuelingCarbsPerHour(Number(e.target.value));
+                  setIsChassisDirty(true);
+                }}
+                className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
+              />
+              <input
+                type="number"
+                value={fuelingCarbsPerHour || 0}
+                onChange={(e) => {
+                  setFuelingCarbsPerHour(Number(e.target.value));
+                  setIsChassisDirty(true);
+                }}
+                className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-center text-white font-mono"
+              />
+            </div>
+          </div>
+
           <button
             onClick={handleSaveChassisAudit}
             disabled={!isChassisDirty || isLoading}
@@ -622,66 +840,7 @@ function DashboardContent() {
           </button>
         </div>
 
-        {/* Fueling Audit - Show when required */}
-        {(lastRunDuration > 90 || (workout?.constraints?.fuelingTarget && workout.constraints.fuelingTarget > 90)) && (
-          <div className="mt-6 pt-6 border-t border-slate-800">
-            <h4 className="text-xs font-bold text-slate-400 mb-4 uppercase">Fueling Audit Required</h4>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-slate-300 mb-2 block">
-                  Carbs per Hour (g/hr)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="150"
-                  value={fuelingCarbsPerHour ?? ''}
-                  onChange={(e) => setFuelingCarbsPerHour(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white"
-                  placeholder="e.g., 60"
-                />
-              </div>
-              <div>
-                <label className="text-sm text-slate-300 mb-2 block">
-                  GI Distress (1-10)
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min="0"
-                    max="10"
-                    value={fuelingGiDistress ?? 0}
-                    onChange={(e) => setFuelingGiDistress(Number(e.target.value))}
-                    className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                  />
-                  <span className="text-sm font-mono text-white w-12 text-right">
-                    {fuelingGiDistress ?? 0}/10
-                  </span>
-                </div>
-                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                  <span>None</span>
-                  <span>Severe</span>
-                </div>
-              </div>
-              <button
-                onClick={async () => {
-                  if (fuelingCarbsPerHour !== null && fuelingGiDistress !== null) {
-                    try {
-                      await logFueling(fuelingCarbsPerHour, fuelingGiDistress);
-                      await runInitialAnalysis();
-                    } catch (err) {
-                      logger.error('Failed to save fueling log', err);
-                    }
-                  }
-                }}
-                disabled={fuelingCarbsPerHour === null || fuelingGiDistress === null}
-                className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-2 rounded-lg transition-colors"
-              >
-                Save Fueling Audit
-              </button>
-            </div>
-          </div>
-        )}
+
 
         {/* Show audit pending message */}
         {analysisResult?.auditStatus === 'AUDIT_PENDING' && (

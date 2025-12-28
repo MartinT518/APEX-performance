@@ -64,7 +64,7 @@ function PlanContent() {
         .eq('user_id', userId)
         .gte('session_date', startDate.toISOString().split('T')[0])
         .lte('session_date', endDate.toISOString().split('T')[0])
-        .order('session_date', { ascending: false });
+        .order('session_date', { ascending: false }) as { data: any[], error: any };
 
       if (error) {
         logger.error('Failed to query past sessions', error);
@@ -238,9 +238,39 @@ function PlanContent() {
     <div className="space-y-6 pb-24 p-4 animate-in fade-in duration-300">
       {showPAR && <PostActionReport onClose={() => setShowPAR(false)} />}
       
-      <header>
-        <h1 className="text-2xl font-bold text-white mb-1">Tactical Map</h1>
-        <p className="text-sm text-slate-400">Phase 2: Metabolic Hybrid Block</p>
+      <header className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-1">Tactical Map</h1>
+          <p className="text-sm text-slate-400">Phase 2: Metabolic Hybrid Block</p>
+        </div>
+          <button 
+            onClick={() => {
+              setLoading(true);
+              loadPlanData();
+            }}
+            disabled={loading}
+            className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 text-slate-400 hover:text-emerald-500 hover:border-emerald-500/50 transition-all disabled:opacity-50 group shadow-lg"
+            title="Regenerate Tactical Plan"
+          >
+            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin text-emerald-500' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+          </button>
+          <button 
+            onClick={async () => {
+              // Dynamic import to avoid client-side issues if action is strict server
+              const { generateEliteWeek } = await import('./actions');
+              const result = await generateEliteWeek("2:59:59"); // Default goal for now
+              if (result.success && result.blueprint) {
+                console.log("Elite Blueprint:", result.blueprint);
+                alert("Generated! Check console for JSON (UI integration pending)");
+              } else {
+                alert("Failed: " + result.message);
+              }
+            }}
+            className="ml-2 bg-slate-900 p-2.5 rounded-xl border border-slate-800 text-slate-400 hover:text-amber-500 hover:border-amber-500/50 transition-all shadow-lg"
+            title="Generate Elite Week (AI)"
+          >
+            <Hammer className="w-5 h-5" />
+          </button>
       </header>
 
       {/* Calendar Grid */}
@@ -289,7 +319,9 @@ function PlanContent() {
                   {day.date}
                 </div>
                 {day.isProvisional && !day.isPast && (
-                  <AlertCircle className="w-3 h-3 text-slate-500 mt-1" title="Provisional - Subject to Daily Chassis Audit" />
+                  <div title="Provisional - Subject to Daily Chassis Audit">
+                    <AlertCircle className="w-3 h-3 text-slate-500 mt-1" />
+                  </div>
                 )}
                 {icon}
               </div>
@@ -332,8 +364,8 @@ function PlanContent() {
                 {analysisResult?.decision && (
                   <div>Decision keys: {Object.keys(analysisResult.decision).join(', ')}</div>
                 )}
-                {analysisResult?.error && (
-                  <div className="text-red-400">Error: {String(analysisResult.error)}</div>
+                {analysisResult?.message && (
+                  <div className="text-red-400">Error: {String(analysisResult.message)}</div>
                 )}
               </div>
             )}

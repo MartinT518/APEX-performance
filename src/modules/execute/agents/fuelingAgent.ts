@@ -44,14 +44,22 @@ export const evaluateFuelingStatus = (input: ISessionSummary['fueling']): IAgent
     const recentLongRuns = longRuns.slice(-4);
     
     // Count sessions with >60g/hr fueling
-    // Check hiddenVariables for fueling data, or check if fueling was logged
+    // Check metadata for actual carb counts to calculate true Gut Index
     gutTrainingIndex = recentLongRuns.filter(session => {
-      // Check if session has fueling data indicating >60g/hr
-      // This would be in hiddenVariables or metadata
-      // For now, we'll use a simplified check - if fueling was logged, assume it was adequate
-      // In a full implementation, we'd check actual carbs/hour from daily_monitoring
-      return session.hiddenVariables?.giDistress !== undefined || 
-             session.fueling !== undefined;
+      // 1. Check metadata for carbsPerHour (from daily_monitoring)
+      const gramsPerHour = session.metadata?.carbsPerHour || 
+                          (session.hiddenVariables as any)?.carbsPerHour;
+      
+      if (gramsPerHour !== undefined && gramsPerHour >= 60) {
+        return true;
+      }
+
+      // 2. Fallback: If carbsPerHour missing, check if fueling was logged at all
+      // but only if it's an 'EXEC' session (suggesting adherence to plan)
+      const hasFuelingLog = session.hiddenVariables?.giDistress !== undefined || 
+                           (session as any).fueling !== undefined;
+      
+      return hasFuelingLog && (session as any).type === 'EXEC';
     }).length;
   }
 
