@@ -125,6 +125,67 @@ export function runStatusResolverTests(): void {
   assertTrue(result8.votes.metabolic.color === 'green', 'GREEN vote should have green color');
   console.log('✓ Test 8: Votes display format');
 
+  // Test 9: Z-score shutdown condition (HRV Z-Score < -1.5 AND Sleep Debt > 4h)
+  const zScoreShutdown = [
+    createVote('structural_agent', 'GREEN', 'Chassis nominal'),
+    createVote('metabolic_agent', 'GREEN', 'Engine nominal'),
+    createVote('fueling_agent', 'GREEN', 'Fueling nominal')
+  ];
+  const result9 = resolveDailyStatus({ 
+    votes: zScoreShutdown, 
+    niggleScore: 2,
+    zScoreContext: {
+      hrvZScore: -1.8, // Below -1.5
+      sleepDebtHours: 5.5 // Above 4h
+    }
+  });
+  assertEqual(result9.global_status, 'SHUTDOWN', 'Z-score shutdown condition should trigger SHUTDOWN');
+  assertTrue(result9.reason.includes('HRV Z-Score'), 'SHUTDOWN reason should mention HRV Z-Score');
+  assertTrue(result9.reason.includes('Sleep Debt'), 'SHUTDOWN reason should mention Sleep Debt');
+  assertTrue(result9.reason.includes('-1.8'), 'SHUTDOWN reason should include Z-score value');
+  assertTrue(result9.reason.includes('5.5'), 'SHUTDOWN reason should include sleep debt value');
+  console.log('✓ Test 9: Z-score shutdown condition (HRV Z < -1.5 AND Sleep Debt > 4h) -> SHUTDOWN');
+
+  // Test 10: Z-score shutdown - HRV Z-Score < -1.5 but Sleep Debt <= 4h -> GO
+  const zScoreNoShutdown1 = [
+    createVote('structural_agent', 'GREEN', 'Chassis nominal'),
+    createVote('metabolic_agent', 'GREEN', 'Engine nominal'),
+    createVote('fueling_agent', 'GREEN', 'Fueling nominal')
+  ];
+  const result10 = resolveDailyStatus({ 
+    votes: zScoreNoShutdown1, 
+    niggleScore: 2,
+    zScoreContext: {
+      hrvZScore: -1.8, // Below -1.5
+      sleepDebtHours: 3.5 // Below 4h
+    }
+  });
+  assertEqual(result10.global_status, 'GO', 'Z-score shutdown requires BOTH conditions');
+  console.log('✓ Test 10: Z-score shutdown - HRV Z < -1.5 but Sleep Debt <= 4h -> GO');
+
+  // Test 11: Z-score shutdown - Sleep Debt > 4h but HRV Z-Score >= -1.5 -> GO
+  const zScoreNoShutdown2 = [
+    createVote('structural_agent', 'GREEN', 'Chassis nominal'),
+    createVote('metabolic_agent', 'GREEN', 'Engine nominal'),
+    createVote('fueling_agent', 'GREEN', 'Fueling nominal')
+  ];
+  const result11 = resolveDailyStatus({ 
+    votes: zScoreNoShutdown2, 
+    niggleScore: 2,
+    zScoreContext: {
+      hrvZScore: -1.2, // Above -1.5
+      sleepDebtHours: 5.5 // Above 4h
+    }
+  });
+  assertEqual(result11.global_status, 'GO', 'Z-score shutdown requires BOTH conditions');
+  console.log('✓ Test 11: Z-score shutdown - Sleep Debt > 4h but HRV Z >= -1.5 -> GO');
+
+  // Test 12: Confidence score capped at 0.85
+  const result12 = resolveDailyStatus({ votes: allGreen, niggleScore: 2 });
+  assertTrue(result12.confidenceScore <= 0.85, 'Confidence score should be capped at 0.85');
+  assertEqual(result12.confidenceScore, 0.85, 'Confidence score should be exactly 0.85');
+  console.log('✓ Test 12: Confidence score capped at 0.85');
+
   console.log('All status resolver tests passed!');
 }
 

@@ -6,6 +6,7 @@
 import type { SessionWithVotes } from '@/app/history/logic/sessionLoader';
 import type { IWorkout } from '@/types/workout';
 import { getCurrentPhase } from '@/modules/analyze/blueprintEngine';
+import { calculateDistanceFromSession } from '@/modules/monitor/utils/volumeCalculator';
 
 // Prototype SessionDetail type (from app.tsx.prototype)
 export interface PrototypeSessionDetail {
@@ -110,11 +111,11 @@ export function sessionWithVotesToPrototype(
   };
 
   // Extract pace and distance first to use in feedback logic
-  const distanceMeters = (metadata as any)?.distance as number | undefined || 
-                        (metadata as any)?.distanceInMeters as number | undefined ||
-                        ((metadata as any)?.summaryDTO?.distance as number | undefined);
-  const distance = distanceMeters ? distanceMeters / 1000 : 
-                   (metadata?.distanceKm as number | undefined);
+  // P0 Fix: Use calculateDistanceFromSession utility for robust distance extraction
+  const distance = calculateDistanceFromSession({
+    duration_minutes: session.duration_minutes,
+    metadata: metadata as any
+  });
 
   // Generate agent feedback
   let agentFeedback: PrototypeSessionDetail['agentFeedback'] = (structuralVote || metabolicVote) ? {

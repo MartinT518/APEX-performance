@@ -28,6 +28,7 @@ interface ExtendedGarminConnect {
 
 export class GarminClient {
   private client: GarminConnect;
+  private static hrvMethodWarningLogged = false;
   private maxRetries = 3;
   private baseDelayMs = 5000; // 5 seconds (increased from 2s for better rate limit handling)
 
@@ -132,7 +133,11 @@ export class GarminClient {
               const hrvData = await client.getHrvData(dateObj);
               hrv = hrvData?.hrvSummary?.lastNightAvg || hrvData?.lastNightAvg;
            } else {
-              logger.debug(`No getHrvData method available, skipping HRV for ${date}`);
+              // Only log warning once per application session to avoid log spam
+              if (!GarminClient.hrvMethodWarningLogged) {
+                 logger.debug(`getHrvData method not available in garminconnect library - HRV data will be skipped`);
+                 GarminClient.hrvMethodWarningLogged = true;
+              }
            }
         } catch (err) {
             logger.warn(`Failed to fetch HRV data for ${date}`, err);

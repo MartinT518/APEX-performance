@@ -35,7 +35,7 @@ export async function persistSessionLog(
   sessionData: SessionLogData
 ): Promise<PersistenceResult> {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: session } = await supabase.auth.getSession();
     const userId = session?.session?.user?.id;
     

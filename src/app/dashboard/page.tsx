@@ -22,7 +22,8 @@ import {
   Moon
 } from 'lucide-react';
 import { SubstitutionModal } from '@/components/plan/SubstitutionModal';
-import { applySubstitutionOption } from '../actions';
+import { ShutdownModal } from '@/components/plan/ShutdownModal';
+import { applySubstitutionOption, acknowledgeShutdown, invalidateTodaySnapshot } from '../actions';
 import { PostActionReport } from '@/components/shared/PostActionReport';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
@@ -98,7 +99,7 @@ function BiometricIntelligenceCard() {
 function DashboardContent() {
   const { todayEntries, setNiggleScore, logStrengthSession, logFueling, loadTodayMonitoring, getDaysSinceLastLift } = useMonitorStore();
   const { profile, loadProfile } = usePhenotypeStore();
-  const [niggleScore, setNiggleScoreLocal] = useState(0);
+  const [niggleScoreLocal, setNiggleScoreLocal] = useState(0);
   const [liftStatus, setLiftStatus] = useState<'NONE' | 'MAIN' | 'HYPER' | 'STR' | 'EXPL'>('NONE');
   const [showIntervention, setShowIntervention] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
@@ -119,6 +120,7 @@ function DashboardContent() {
   const [valuation, setValuation] = useState<ValuationResult | null>(null);
   const [isChassisDirty, setIsChassisDirty] = useState(false);
   const [auditStatus, setAuditStatus] = useState<'NOMINAL' | 'AUDIT_PENDING' | 'CAUTION'>('NOMINAL');
+  const [previousNiggleScore, setPreviousNiggleScore] = useState<number | null>(null);
 
   // Load data on mount
   useEffect(() => {
@@ -202,10 +204,26 @@ function DashboardContent() {
     }
   }, [isShutdown, hasStructuralRed]);
 
+  // Watch for niggle threshold crossing - immediate trigger (no Save required)
+  // FR-3.1: Modal must trigger immediately when niggle > 3, not after Save
+  useEffect(() => {
+    // Watch niggleScoreLocal (local state from slider) not niggleScore (store)
+    if (niggleScoreLocal > 3 && (previousNiggleScore === null || previousNiggleScore <= 3)) {
+      // Immediate trigger - no Save required
+      logger.info('Niggle threshold crossed (>3), triggering substitution modal immediately');
+      setShowIntervention(true);
+      // Trigger analysis if we have enough data
+      if (analysisResult) {
+        runInitialAnalysis();
+      }
+    }
+    setPreviousNiggleScore(niggleScoreLocal);
+  }, [niggleScoreLocal, previousNiggleScore, analysisResult]);
+
   const loadBaselineMetrics = async () => {
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const userId = session?.session?.user?.id;
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
       
       if (!userId) return;
 
@@ -247,22 +265,35 @@ function DashboardContent() {
   const runInitialAnalysis = async () => {
     setIsLoading(true);
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const userId = session?.session?.user?.id;
-      const result = await runCoachAnalysis(userId);
+      // Get session tokens from client-side Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      const accessToken = session?.access_token;
+      const refreshToken = session?.refresh_token;
       
-      // Update Audit Status logic
+      const result = await runCoachAnalysis(
+        accessToken || undefined,
+        refreshToken || undefined
+      );
+      
+      // Store auditStatus always, not just when success
       if (result.auditStatus) {
         setAuditStatus(result.auditStatus as any);
       } else {
         setAuditStatus('NOMINAL');
       }
 
+      // Store result only if success, but auditStatus is already stored above
       if (result.success) {
         setAnalysisResult(result);
+      } else if (result.auditStatus === 'AUDIT_PENDING') {
+        // Store minimal result for UI to display audit banner
+        setAnalysisResult({ ...result, auditStatus: result.auditStatus } as IAnalysisResult);
       }
       
       // Calculate ValuationEngine probability
+      // Reuse session from above (already extracted at line 266)
+      // userId is already available from line 267
       if (userId) {
         const endDate = new Date();
         const startDate = new Date();
@@ -336,7 +367,7 @@ function DashboardContent() {
       setIsLoading(true);
       
       // Save Niggle
-      await setNiggleScore(niggleScore);
+      await setNiggleScore(niggleScoreLocal);
       
       // Save Strength Status
       const tierMap: Record<string, 'maintenance' | 'hypertrophy' | 'strength' | 'explosive'> = {
@@ -356,13 +387,17 @@ function DashboardContent() {
         await logFueling(fuelingCarbsPerHour, fuelingGiDistress || 1);
       }
 
-      // Reload analysis to update Integrity Ratio
+      // FR-5.4: Invalidate today's snapshot when gatekeeper inputs change
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      const refreshToken = session?.refresh_token;
+      await invalidateTodaySnapshot(accessToken || undefined, refreshToken || undefined);
+
+      // Reload analysis to update Integrity Ratio (will regenerate snapshot)
       await runInitialAnalysis();
       
-      // Trigger intervention if niggle is high
-      if (niggleScore > 3) {
-        setShowIntervention(true);
-      }
+      // Note: Substitution modal is now triggered immediately via useEffect when niggleScoreLocal > 3
+      // No need to trigger here - useEffect handles it (FR-3.1)
       
       setIsChassisDirty(false);
     } catch (err) {
@@ -383,7 +418,7 @@ function DashboardContent() {
         <SubstitutionModal
           open={showIntervention || hasStructuralRed}
           onClose={() => setShowIntervention(false)}
-          niggleScore={niggleScore}
+          niggleScore={niggleScoreLocal}
           onSelectOption={async (option) => {
             const result = await applySubstitutionOption(option);
             if (result.success) {
@@ -396,42 +431,24 @@ function DashboardContent() {
         />
       )}
       
-      {/* Shutdown Modal - triggers on SHUTDOWN status */}
+      {/* Shutdown Modal - triggers on SHUTDOWN status (FR-3.6, FR-3.7) */}
       {isShutdown && !hasStructuralRed && (
-        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 w-full max-w-md rounded-2xl border-2 border-red-500 shadow-2xl shadow-red-900/40 overflow-hidden">
-            <div className="bg-red-500/10 p-4 border-b border-red-500/20 flex items-center gap-3">
-              <AlertTriangle className="w-8 h-8 text-red-500 animate-pulse" />
-              <div>
-                <h2 className="text-lg font-bold text-white tracking-tight">SYSTEM SHUTDOWN</h2>
-                <p className="text-xs text-red-400 font-mono">Multiple Critical Flags Detected</p>
-              </div>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-slate-300 text-sm leading-relaxed">
-                {statusReason}
-              </p>
-              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-                <div className="text-xs text-slate-500 uppercase mb-2">Required Action</div>
-                <div className="flex items-center gap-3">
-                  <Moon className="w-8 h-8 text-red-500" />
-                  <div>
-                    <div className="text-white font-bold">Complete Rest + Mobility</div>
-                    <div className="text-xs text-slate-400">No training stimulus allowed</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="p-4 bg-slate-950">
-              <button
-                onClick={() => setShowShutdown(false)}
-                className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-lg transition-colors"
-              >
-                Acknowledge
-              </button>
-            </div>
-          </div>
-        </div>
+        <ShutdownModal
+          open={showShutdown || (isShutdown && !hasStructuralRed)}
+          onClose={() => setShowShutdown(false)}
+          reason={statusReason}
+          onAcknowledge={async () => {
+            const result = await acknowledgeShutdown();
+            if (result.success) {
+              setShowShutdown(false);
+              // Reload analysis to show updated workout
+              await runInitialAnalysis();
+            } else {
+              logger.error('Failed to acknowledge shutdown:', result.message);
+              alert(`Failed to acknowledge shutdown: ${result.message || 'Unknown error'}`);
+            }
+          }}
+        />
       )}
       
       {/* Post Action Report */}
@@ -550,7 +567,7 @@ function DashboardContent() {
             <span className={valuation?.integrityRatio && valuation.integrityRatio < 0.8 ? 'text-red-400 font-bold' : ''}>
               {valuation?.chassisVerdict || `LIFT: ${liftStatus === 'NONE' ? `${getDaysSinceLastLift()}d AGO` : 'TODAY'}`}
             </span>
-            <span>NIGGLE: {niggleScore}/10</span>
+            <span>NIGGLE: {niggleScoreLocal}/10</span>
           </div>
         </div>
 
@@ -573,6 +590,11 @@ function DashboardContent() {
             <span>HRV: {hrv ? `${Math.round(hrv)}ms` : '--'}</span>
             <span>SLEEP: {sleepSeconds ? `${(sleepSeconds / 3600).toFixed(1)}h` : '--'} {sleepScore ? `(${sleepScore})` : ''}</span>
           </div>
+          {hrv && (
+            <div className="mt-1 text-[9px] text-slate-600 italic">
+              Avg overnight HRV (sleep)
+            </div>
+          )}
         </div>
       </div>
 
@@ -693,15 +715,15 @@ function DashboardContent() {
         <div className="mb-6">
           <div className="flex justify-between text-sm mb-2">
             <span className="text-white">Niggle / Pain Score</span>
-            <span className={`font-mono font-bold ${niggleScore > 3 ? 'text-red-400' : 'text-emerald-400'}`}>
-              {niggleScore}/10
+            <span className={`font-mono font-bold ${niggleScoreLocal > 3 ? 'text-red-400' : 'text-emerald-400'}`}>
+              {niggleScoreLocal}/10
             </span>
           </div>
           <input 
             type="range" 
             min="0" 
             max="10" 
-            value={niggleScore} 
+            value={niggleScoreLocal} 
             onChange={handleSliderChange}
             className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
           />
@@ -820,30 +842,32 @@ function DashboardContent() {
             {isLoading ? 'SAVING...' : isChassisDirty ? 'SAVE CHASSIS AUDIT' : 'CHASSIS LOGGED'}
           </button>
 
-          <button
-            onClick={async () => {
-                if (confirm('Backfill Dec 1-19 with Niggle:0 and Strength defaults (Dec 17: Power, Dec 16: Explosive)?')) {
-                    setIsLoading(true);
-                    const res = await backfillDailyMonitoring();
-                    if (res.success) {
-                        alert(`Successfully backfilled ${res.count} days!`);
-                        await runInitialAnalysis();
-                    } else {
-                        alert(`Backfill failed: ${res.message || res.error}`);
-                    }
-                    setIsLoading(false);
-                }
-            }}
-            className="w-full mt-2 text-[10px] text-slate-500 hover:text-slate-400 font-mono py-1 border border-slate-800 rounded flex items-center justify-center gap-1"
-          >
-            <TrendingUp className="w-3 h-3" /> BACKFILL HISTORY
-          </button>
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              onClick={async () => {
+                  if (confirm('Backfill Dec 1-19 with Niggle:0 and Strength defaults (Dec 17: Power, Dec 16: Explosive)?')) {
+                      setIsLoading(true);
+                      const res = await backfillDailyMonitoring();
+                      if (res.success) {
+                          alert(`Successfully backfilled ${res.count} days!`);
+                          await runInitialAnalysis();
+                      } else {
+                          alert(`Backfill failed: ${res.message || res.error}`);
+                      }
+                      setIsLoading(false);
+                  }
+              }}
+              className="w-full mt-2 text-[10px] text-slate-500 hover:text-slate-400 font-mono py-1 border border-slate-800 rounded flex items-center justify-center gap-1"
+            >
+              <TrendingUp className="w-3 h-3" /> BACKFILL HISTORY
+            </button>
+          )}
         </div>
 
 
 
         {/* Show audit pending message */}
-        {analysisResult?.auditStatus === 'AUDIT_PENDING' && (
+        {auditStatus === 'AUDIT_PENDING' && (
           <div className="mt-6 pt-6 border-t border-red-500/50">
             <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4">
               <p className="text-sm text-red-400 font-semibold mb-2">

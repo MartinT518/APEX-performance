@@ -49,7 +49,7 @@ async function debugGarminDuration() {
     process.exit(1);
   }
   
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   
   // For server-side script, we need to query by user_id directly
   // Since we can't authenticate as a user, we'll need to either:

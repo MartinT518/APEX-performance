@@ -29,6 +29,22 @@ function formatPaceFromSeconds(secondsPerKm: number): string {
 
 const execAsync = promisify(exec);
 
+interface WellnessData {
+  date: string;
+  hrv: number | null;
+  rhr: number | null;
+  sleepSeconds: number | null;
+  sleepScore: number | null;
+}
+
+interface WellnessSyncResponse {
+  success: boolean;
+  wellness_data?: WellnessData[];
+  count?: number;
+  error?: string;
+  message?: string;
+}
+
 interface MCPActivity {
   activityId: number;
   activityName: string;
@@ -77,10 +93,52 @@ export async function syncGarminSessionsToDatabaseMCP(
   startDate: string,
   endDate: string,
   userId: string,
-  reSync: boolean = false
+  reSync: boolean = false,
+  clientAccessToken?: string,
+  clientRefreshToken?: string
 ): Promise<GarminSyncResult> {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient(clientAccessToken || undefined);
+    
+    // CRITICAL: If client provided access token, set it immediately for RLS
+    if (clientAccessToken && userId) {
+      logger.info('Setting session from client-provided tokens in syncGarminSessionsToDatabaseMCP');
+      try {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: clientAccessToken,
+          refresh_token: clientRefreshToken || '',
+        } as { access_token: string; refresh_token: string });
+        
+        if (error) {
+          logger.error('Error setting session in syncGarminSessionsToDatabaseMCP:', error);
+        } else {
+          logger.info('Session set successfully', {
+            hasSession: !!data.session,
+            userId: data.session?.user?.id
+          });
+        }
+      } catch (sessionError: any) {
+        logger.warn('Failed to set session from client token:', sessionError?.message);
+      }
+      
+      // Wait for session to propagate
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // Verify session is set for RLS (auth.uid() must be available)
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
+      logger.warn('No session found in syncGarminSessionsToDatabaseMCP, RLS may fail');
+      // Try getUser as fallback
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        logger.error('No user session available for RLS. Sync may fail with RLS violations.');
+      } else {
+        logger.info(`User session verified: ${user.id}`);
+      }
+    } else {
+      logger.info(`Session verified for user: ${session.user.id}`);
+    }
 
     logger.info(`Syncing Garmin activities from ${startDate} to ${endDate} using MCP client`);
 
@@ -344,6 +402,47 @@ export async function syncGarminSessionsToDatabaseMCP(
         
         logger.info(`✅ Final duration for ${activity.activityId}: ${durationMinutes} minutes (from ${durationSeconds} seconds)`);
         
+        // Extract hr_source from Garmin data for source quality weighting
+        // Check multiple possible locations in Garmin response
+        let hrSource: 'WRIST_HR' | 'CHEST_STRAP' | 'UNKNOWN' | null = null;
+        if (activity.details) {
+          const details = activity.details as any;
+          // Try various locations where Garmin might store HR source
+          const hrSourceValue = details.summaryDTO?.hrSource ||
+                               details.metadataDTO?.hrSource ||
+                               details.hrSource ||
+                               activity.hrSource ||
+                               (details.summaryDTO as any)?.heartRateSource;
+          
+          if (hrSourceValue) {
+            const hrSourceStr = String(hrSourceValue).toUpperCase();
+            if (hrSourceStr.includes('CHEST') || hrSourceStr.includes('STRAP') || hrSourceStr.includes('HRM')) {
+              hrSource = 'CHEST_STRAP';
+            } else if (hrSourceStr.includes('WRIST') || hrSourceStr.includes('OPTICAL') || hrSourceStr.includes('WATCH')) {
+              hrSource = 'WRIST_HR';
+            } else {
+              hrSource = 'UNKNOWN';
+            }
+          }
+        }
+        
+        // If hr_source not found, try to infer from device type
+        if (!hrSource && activity.device) {
+          const deviceStr = String(activity.device).toUpperCase();
+          if (deviceStr.includes('HRM') || deviceStr.includes('CHEST') || deviceStr.includes('STRAP')) {
+            hrSource = 'CHEST_STRAP';
+          } else if (deviceStr.includes('WATCH') || deviceStr.includes('FORERUNNER') || deviceStr.includes('FENIX')) {
+            hrSource = 'WRIST_HR';
+          }
+        }
+        
+        // Default to UNKNOWN if still not found
+        if (!hrSource) {
+          hrSource = 'UNKNOWN';
+        }
+        
+        logger.debug(`Activity ${activity.activityId}: Extracted hr_source = ${hrSource}`);
+        
         // Process activity details if available from Python script
         // NOTE: Activities can have summary data (duration, distance, etc.) even without detail metrics
         // So we should store the activity even if pointCount is 0, as long as we have duration
@@ -451,7 +550,9 @@ const sessionLogData = sessionResultToLogData(processingResult, durationMinutes,
             .update({
               sport_type: sportType,
               duration_minutes: sessionLogData.durationMinutes,
-              metadata: sessionLogData.metadata
+              metadata: sessionLogData.metadata,
+              hr_source: hrSource,
+              device: activity.device || null
             } as never)
             .eq('id', (existing as { id: string }).id);
 
@@ -469,7 +570,9 @@ const sessionLogData = sessionResultToLogData(processingResult, durationMinutes,
             sport_type: sportType,
             duration_minutes: sessionLogData.durationMinutes,
             source: sessionLogData.source,
-            metadata: sessionLogData.metadata
+            metadata: sessionLogData.metadata,
+            hr_source: hrSource,
+            device: activity.device || null
           };
           
           const { error: insertError } = await supabase
@@ -518,3 +621,219 @@ function mapGarminSportType(activityType: string): 'RUNNING' | 'CYCLING' | 'STRE
   return 'OTHER';
 }
 
+/**
+ * Syncs Garmin wellness data (HRV, RHR, Sleep) using MCP Python client
+ * This provides access to get_hrv_data method which isn't available in npm garminconnect
+ */
+export async function syncGarminWellnessToDatabaseMCP(
+  startDate: string,
+  endDate: string,
+  userId: string,
+  clientAccessToken?: string,
+  clientRefreshToken?: string
+): Promise<{ synced: number; errors: number }> {
+  try {
+    const supabase = await createServerClient(clientAccessToken || undefined);
+    
+    // CRITICAL: If client provided access token, set it immediately for RLS
+    if (clientAccessToken && userId) {
+      logger.info('Setting session from client-provided tokens in syncGarminWellnessToDatabaseMCP');
+      try {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: clientAccessToken,
+          refresh_token: clientRefreshToken || '',
+        } as { access_token: string; refresh_token: string });
+        
+        if (error) {
+          logger.error('Error setting session in syncGarminWellnessToDatabaseMCP:', error);
+        } else {
+          logger.info('Session set successfully for wellness sync', {
+            hasSession: !!data.session,
+            userId: data.session?.user?.id
+          });
+        }
+      } catch (sessionError: any) {
+        logger.warn('Failed to set session from client token:', sessionError?.message);
+      }
+      
+      // Wait for session to propagate
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // Verify session is set for RLS
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
+      logger.warn('No session found in syncGarminWellnessToDatabaseMCP, RLS may fail');
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        logger.error('No user session available for RLS. Wellness sync may fail with RLS violations.');
+      } else {
+        logger.info(`User session verified: ${user.id}`);
+      }
+    } else {
+      logger.info(`Session verified for user: ${session.user.id}`);
+    }
+    
+    logger.info(`Syncing Garmin wellness data from ${startDate} to ${endDate} using MCP client`);
+
+    // Call Python script that uses MCP client
+    const scriptPath = path.resolve(process.cwd(), 'scripts', 'sync-garmin-wellness-mcp.py');
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    
+    let stdout: string;
+    let stderr: string;
+    
+    try {
+      const result = await execAsync(
+        `${pythonCmd} "${scriptPath}" "${startDate}" "${endDate}"`,
+        {
+          cwd: process.cwd(),
+          maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+        }
+      );
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (execError) {
+      const error = execError as { stdout?: string; stderr?: string; code?: number };
+      stdout = error.stdout || '';
+      stderr = error.stderr || '';
+      
+      // If Python script failed, try to parse error from stdout
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout);
+          if (parsed.error === 'RATE_LIMITED') {
+            throw new Error('Rate limit exceeded. Please wait a few minutes before trying again.');
+          }
+          if (parsed.error === 'AUTH_FAILED') {
+            throw new Error('Authentication failed. Please run garmin-connect-mcp-auth to re-authenticate.');
+          }
+        } catch {
+          // Not JSON, continue with error handling
+        }
+      }
+      
+      // Log both stdout and stderr for debugging
+      logger.error(`Python script execution failed`);
+      logger.error(`STDOUT: ${stdout}`);
+      logger.error(`STDERR: ${stderr}`);
+      
+      // Try to parse error from stdout if it's JSON
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout);
+          if (parsed.error) {
+            throw new Error(`Wellness sync script error: ${parsed.error} - ${parsed.message || ''}`);
+          }
+        } catch {
+          // Not JSON, continue with generic error
+        }
+      }
+      
+      throw new Error(`Wellness sync script failed: ${stderr || stdout || 'Unknown error'}`);
+    }
+
+    // Parse JSON response from Python script
+    interface WellnessSyncResponse {
+      success: boolean;
+      wellness_data?: Array<{
+        date: string;
+        hrv: number | null;
+        rhr: number | null;
+        sleepSeconds: number | null;
+        sleepScore: number | null;
+      }>;
+      count?: number;
+      entries_with_data?: number;
+      error?: string;
+      message?: string;
+    }
+
+    let response: WellnessSyncResponse;
+    try {
+      response = JSON.parse(stdout);
+    } catch (parseError) {
+      logger.error(`Failed to parse Python script response: ${stdout}`);
+      throw new Error('Invalid response from wellness sync script');
+    }
+
+    if (!response.success) {
+      throw new Error(response.message || response.error || 'Wellness sync failed');
+    }
+
+    if (!response.wellness_data || response.wellness_data.length === 0) {
+      logger.info('No wellness data returned from sync');
+      return { synced: 0, errors: 0 };
+    }
+
+    const entriesWithData = response.entries_with_data || 0;
+    logger.info(`Received ${response.wellness_data.length} wellness entries (${entriesWithData} with data)`);
+
+    // Sync wellness data to database
+    let synced = 0;
+    let errors = 0;
+    let skipped = 0;
+
+    for (const wellness of response.wellness_data) {
+      try {
+        // Check if entry exists
+        const { data: existing } = await supabase
+          .from('daily_monitoring')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('date', wellness.date)
+          .maybeSingle() as any;
+
+        const updateData = {
+          hrv: wellness.hrv,
+          rhr: wellness.rhr,
+          sleep_seconds: wellness.sleepSeconds,
+          sleep_score: wellness.sleepScore,
+          updated_at: new Date().toISOString()
+        };
+
+        // Only update if we have at least one non-null value
+        if (wellness.hrv !== null || wellness.rhr !== null || wellness.sleepSeconds !== null) {
+          if (existing) {
+            const { error } = await supabase
+              .from('daily_monitoring')
+              .update(updateData as never)
+              .eq('id', existing.id);
+            if (error) {
+              logger.error(`Failed to update wellness for ${wellness.date}: ${error.message}`, error);
+              errors++;
+            } else {
+              synced++;
+            }
+          } else {
+            const { error } = await supabase
+              .from('daily_monitoring')
+              .insert({
+                user_id: userId,
+                date: wellness.date,
+                ...updateData
+              } as never);
+            if (error) {
+              logger.error(`Failed to insert wellness for ${wellness.date}: ${error.message}`, error);
+              errors++;
+            } else {
+              synced++;
+            }
+          }
+        } else {
+          // No data to sync for this date - this is not an error, just skip
+          skipped++;
+        }
+      } catch (err) {
+        logger.error(`Failed to sync wellness for ${wellness.date}`, err);
+        errors++;
+      }
+    }
+
+    logger.info(`Wellness sync complete: ${synced} synced, ${errors} errors, ${skipped} skipped (no data)`);
+    return { synced, errors };
+  } catch (err) {
+    logger.error('Wellness sync via MCP failed', err);
+    return { synced: 0, errors: 1 };
+  }
+}

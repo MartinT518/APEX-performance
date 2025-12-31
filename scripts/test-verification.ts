@@ -18,7 +18,7 @@ const results: TestResult[] = [];
 
 async function testSupabaseConnection() {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data, error } = await supabase.from('phenotype_profiles').select('count').limit(1);
     
     if (error) throw error;
@@ -37,7 +37,7 @@ async function testSupabaseConnection() {
 
 async function testDatabaseSchema() {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const tables = [
       'phenotype_profiles',
       'daily_monitoring',

@@ -34,7 +34,7 @@ async function listUsers() {
     process.exit(1);
   }
   
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   
   // Query auth.users table (requires service role key)
   const { data: users, error } = await supabase.auth.admin.listUsers();

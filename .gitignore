@@ -65,3 +65,61 @@ garbage/
 SECURITY_ANALYSIS.md
 SECURITY_IMPLEMENTATION_SUMMARY.md
 
+# documentation and roadmap (sensitive/internal)
+/docs/
+/docs/**
+*.md
+!README.md
+!SECURITY.md
+!DEPLOYMENT.md
+!SETUP_CHECKLIST.md
+!TESTING_CHECKLIST.md
+!USER_GUIDE.md
+!IMPORT_GUIDE.md
+!POST_IMPORT_GUIDE.md
+!LOCALHOST_SETUP.md
+!SUPABASE_SETUP.md
+!GARMIN_MCP_SETUP.md
+!ENV_TEMPLATE.md
+!ROOT_CAUSE_ANALYSIS_REPORT.md
+
+# roadmap and planning documents
+*roadmap*.md
+*ROADMAP*.md
+*ROADMAP*
+APEX*.md
+MAKER_*.md
+MAKER_CHECK*.md
+*_CHECK*.md
+*_REPORT.md
+*_VERIFICATION.md
+*_COMPLIANCE*.md
+*_DELTA.md
+*_SUMMARY.md
+*_ANALYSIS*.md
+*_IMPLEMENTATION*.md
+CODE_REVIEW*.md
+COMPREHENSIVE*.md
+RLS_*.md
+NEXT_STEPS.md
+GET_USER_ID.md
+UserCasesUserStories.md
+UIUXspecification.md
+TrainingBlueprint.pdf
+
+# memory and context files
+/memory/
+/memory/**
+
+# data folder (contains user data exports)
+/data/
+/data/**
+
+# local check scripts
+check_*.ts
+check_*.js
+
+# garbage and temporary files
+garbage/
+*.tmp
+*.temp

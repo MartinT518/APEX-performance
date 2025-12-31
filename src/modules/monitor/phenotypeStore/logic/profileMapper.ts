@@ -11,6 +11,7 @@ export function mapRowToProfile(row: PhenotypeRow): IPhenotypeProfile {
     id: row.id,
     user_id: row.user_id,
     is_high_rev: row.is_high_rev,
+    goal_marathon_time: row.goal_marathon_time ?? '2:30:00', // Default to 2:30:00 if not set
     config: {
       max_hr_override: row.max_hr_override,
       threshold_hr_known: row.threshold_hr_known ?? undefined,

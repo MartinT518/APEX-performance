@@ -70,6 +70,12 @@ export interface IPhenotypeProfile {
    * User's current weight in kg.
    */
   weight?: number;
+
+  /**
+   * Target marathon time in HH:MM:SS format (e.g., "2:20:00" for 2:20:00 goal).
+   * Default: "2:30:00"
+   */
+  goal_marathon_time?: string;
   
   config: IPhenotypeConfig;
   

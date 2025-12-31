@@ -48,7 +48,7 @@ export async function persistAgentVotes(
       return { success: false, error: 'Invalid session ID format' };
     }
 
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: session } = await supabase.auth.getSession();
     const userId = session?.session?.user?.id;
     

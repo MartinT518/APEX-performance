@@ -22,6 +22,13 @@ export interface SessionSummaryInputs {
     planLimitRedZone?: number;
   };
   sessionHistory?: PrototypeSessionDetail[]; // For fueling agent
+  // P0 Fix: Accept database-loaded values instead of using client-side state
+  structuralData?: {
+    niggleScore?: number;
+    daysSinceLastLift?: number;
+    lastLiftTier?: 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
+    currentWeeklyVolume?: number;
+  };
 }
 
 /**
@@ -31,21 +38,35 @@ export interface SessionSummaryInputs {
 export async function buildSessionSummary(
   inputs: SessionSummaryInputs
 ): Promise<ISessionSummary> {
-  const { sessionPoints, workout, metabolicData, sessionHistory } = inputs;
+  const { sessionPoints, workout, metabolicData, sessionHistory, structuralData } = inputs;
   
-  const monitor = useMonitorStore.getState();
-  const analyzeStore = useAnalyzeStore.getState();
+  // P0 Fix: Use provided structural data if available (from database), otherwise fall back to client state
+  // This allows server actions to pass database-loaded values
+  let niggleScore: number;
+  let daysSinceLift: number;
+  let lastLiftTier: 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive' | undefined;
+  let currentWeeklyVolume: number;
   
-  // Get structural agent inputs
-  const daysSinceLift = monitor.getDaysSinceLastLift();
-  const lastLiftTier = await monitor.getLastLiftTier();
-  const currentWeeklyVolume = await monitor.calculateCurrentWeeklyVolume();
+  if (structuralData) {
+    // Use database-loaded values (server action context)
+    niggleScore = structuralData.niggleScore ?? 0;
+    daysSinceLift = structuralData.daysSinceLastLift ?? 999;
+    lastLiftTier = structuralData.lastLiftTier;
+    currentWeeklyVolume = structuralData.currentWeeklyVolume ?? 0;
+  } else {
+    // Fall back to client state (client component context)
+    const monitor = useMonitorStore.getState();
+    niggleScore = monitor.todayEntries.niggleScore || 0;
+    daysSinceLift = monitor.getDaysSinceLastLift();
+    lastLiftTier = await monitor.getLastLiftTier();
+    currentWeeklyVolume = await monitor.calculateCurrentWeeklyVolume();
+  }
   
   // Build summary - each agent gets only its slice
   const summary: ISessionSummary = {
     structural: {
-      niggleScore: monitor.todayEntries.niggleScore || 0,
-      daysSinceLastLift: daysSinceLift,
+      niggleScore,
+      daysSinceLastLift: daysSinceLift, // Use local variable daysSinceLift
       tonnageTier: lastLiftTier,
       currentWeeklyVolume,
       sessionPoints: sessionPoints.length > 0 ? sessionPoints : undefined // For cadence stability calculation
@@ -62,7 +83,7 @@ export async function buildSessionSummary(
     }
   };
   
-  logger.info(`Session Summary built: Structural (${summary.structural.niggleScore} niggle, ${daysSinceLift} days since lift), Metabolic (${sessionPoints.length} points), Fueling (${workout.durationMinutes}min)`);
+  logger.info(`Session Summary built: Structural (${summary.structural.niggleScore} niggle, ${summary.structural.daysSinceLastLift} days since lift), Metabolic (${sessionPoints.length} points), Fueling (${workout.durationMinutes}min)`);
   
   return summary;
 }

@@ -41,14 +41,26 @@ export class DailyCoach {
   }
 
   // Step 4: Analysis (Baselines & Blueprint)
-  static async runAnalysis(currentHRV: number, currentTonnage: number, history: PrototypeSessionDetail[] = []): Promise<AnalysisResult> {
-    return runAnalysis(currentHRV, currentTonnage, history);
+  static async runAnalysis(currentHRV: number, currentTonnage: number, history: PrototypeSessionDetail[] = [], goalTime: string = '2:30:00'): Promise<AnalysisResult> {
+    return runAnalysis(currentHRV, currentTonnage, history, goalTime);
   }
 
   // Step 5 & 6: Agent Evaluation & Coach Synthesis
   static async generateDecision(
     todaysWorkout: IWorkout,
-    metabolicData?: { sessionPoints?: ISessionDataPoint[]; hrvBaseline?: number; currentHRV?: number; planLimitRedZone?: number },
+    metabolicData?: { 
+      sessionPoints?: ISessionDataPoint[]; 
+      hrvBaseline?: number; 
+      currentHRV?: number; 
+      planLimitRedZone?: number;
+      sessionHistory?: PrototypeSessionDetail[];
+      structuralData?: {
+        niggleScore?: number;
+        daysSinceLastLift?: number;
+        lastLiftTier?: 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
+        currentWeeklyVolume?: number;
+      };
+    },
     integrity?: SessionIntegrity
   ): Promise<DecisionResult> {
     return generateDecision(todaysWorkout, metabolicData, integrity);

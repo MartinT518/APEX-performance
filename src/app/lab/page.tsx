@@ -9,6 +9,8 @@ import { calculateValuation } from '@/modules/analyze/valuationEngine';
 import { loadSessionsWithVotes } from '../history/logic/sessionLoader';
 import { sessionWithVotesToPrototype } from '@/types/prototype';
 import { supabase } from '@/lib/supabase';
+import { usePhenotypeStore } from '@/modules/monitor/phenotypeStore';
+import { getRequiredWeeklyVolume, formatGoalTimeDisplay, parseGoalTime } from '@/modules/analyze/utils/goalTime';
 
 import { 
   TrendingUp, 
@@ -22,6 +24,7 @@ import {
 import type { GutIndexData } from './logic/dataLoader';
 
 function LabContent() {
+  const { profile, loadProfile } = usePhenotypeStore();
   const [integrityData, setIntegrityData] = useState<number[]>([]);
   const [decouplingData, setDecouplingData] = useState<number[]>([]);
   const [longrunEfficiencyData, setLongrunEfficiencyData] = useState<number[]>([]);
@@ -32,10 +35,24 @@ function LabContent() {
   const [integrityRatio, setIntegrityRatio] = useState<number>(0);
   const [vetoCount, setVetoCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [blueprintProbability, setBlueprintProbability] = useState<number>(0);
 
   useEffect(() => {
+    loadProfile();
     loadData();
   }, []);
+  
+  // Calculate dynamic campaign targets based on goal time
+  const goalTime = profile?.goal_marathon_time || '2:30:00';
+  const goalDisplay = formatGoalTimeDisplay(goalTime);
+  const requiredWeeklyVolume = getRequiredWeeklyVolume(goalTime);
+  
+  // Calculate required long runs: Base 20 for 2:30:00, scale with goal time
+  // Faster goal = more long runs needed
+  const baseLongRuns = 20; // For 2:30:00 goal
+  const twoThirtySeconds = (2 * 3600) + (30 * 60);
+  const goalSeconds = parseGoalTime(goalTime);
+  const longRunTarget = Math.round(baseLongRuns * (twoThirtySeconds / goalSeconds));
 
   const loadData = async () => {
     setIsLoading(true);
@@ -67,6 +84,7 @@ function LabContent() {
         setVerdictText(valuation.verdictText);
         setIntegrityRatio(valuation.integrityRatio);
         setVetoCount(valuation.vetoCount);
+        setBlueprintProbability(valuation.blueprintProbability);
         
         // Baseline integrity from current valuation
         const integrityRatioPercent = Math.min(150, (valuation.integrityRatio / 0.8) * 100);
@@ -136,7 +154,7 @@ function LabContent() {
       <header className="flex justify-between items-end">
         <div>
           <h1 className="text-2xl font-black text-white tracking-tighter uppercase italic">Campaign War Room</h1>
-          <p className="text-xs text-slate-500 font-mono">Analysis Unit C-1 // Target: 2:29:59</p>
+          <p className="text-xs text-slate-500 font-mono">Analysis Unit C-1 // Target: {goalDisplay}</p>
         </div>
         <div className="bg-slate-900 px-3 py-1 rounded-full border border-slate-800 text-[10px] text-emerald-500 font-bold flex items-center gap-1.5 shadow-lg">
           <Activity className="w-3 h-3" /> AGENT C: ACTIVE
@@ -159,7 +177,7 @@ function LabContent() {
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] font-bold uppercase tracking-tighter text-slate-500">
                 <span>Capped Volume (Chassis)</span>
-                <span className="text-white font-mono">{Math.round(integrityRatio < 0.8 ? 80 : 120)} km/week</span>
+                <span className="text-white font-mono">{Math.round(integrityRatio < 0.8 ? requiredWeeklyVolume * 0.8 : requiredWeeklyVolume)} km/week</span>
               </div>
               <div className="h-2 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
                 <div 
@@ -172,7 +190,7 @@ function LabContent() {
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] font-bold uppercase tracking-tighter text-slate-500 font-mono">
                 <span>Potential Volume (Engine)</span>
-                <span className="text-blue-400">160 km/week</span>
+                <span className="text-blue-400">{requiredWeeklyVolume} km/week ({goalDisplay})</span>
               </div>
               <div className="h-2 bg-slate-950 rounded-full border border-slate-800 overflow-hidden">
                 <div 
@@ -183,14 +201,14 @@ function LabContent() {
 
             <p className="text-[11px] text-slate-400 italic">
               {integrityRatio < 0.8 
-                ? "Your Engine is capable of 160km, but your Chassis (Strength) is restricting you to 80km to prevent injury." 
-                : "Chassis strength is nominal. You have unlocked 100% of blueprint volume."}
+                ? `Your Engine is capable of ${requiredWeeklyVolume}km/week (${goalDisplay}), but your Chassis (Strength) is restricting you to ${Math.round(requiredWeeklyVolume * 0.8)}km/week to prevent injury.` 
+                : `Chassis strength is nominal. You have unlocked 100% of blueprint volume (${requiredWeeklyVolume}km/week for ${goalDisplay}).`}
             </p>
           </div>
 
           <div className="bg-slate-950/50 rounded-xl p-4 border border-slate-800/50 flex flex-col items-center justify-center text-center space-y-2">
             <div className={`text-4xl font-black font-mono ${integrityRatio < 0.8 ? 'text-red-500' : 'text-emerald-500'}`}>
-              -{Math.round(integrityRatio < 0.8 ? 40 : 0)}%
+              -{Math.round(integrityRatio < 0.8 ? ((requiredWeeklyVolume - (requiredWeeklyVolume * 0.8)) / requiredWeeklyVolume) * 100 : 0)}%
             </div>
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
               Volume Opportunity Cost
@@ -502,14 +520,14 @@ function LabContent() {
               <div className="flex justify-between items-end border-b border-slate-800/50 pb-3">
                  <div className="space-y-0.5">
                     <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Banked Long Runs</span>
-                    <div className="text-sm font-mono text-slate-400">Targeting 20 Units</div>
+                    <div className="text-sm font-mono text-slate-400">Targeting {longRunTarget} Units ({goalDisplay})</div>
                  </div>
-                 <span className="text-2xl font-black text-white font-mono">{longrunEfficiencyData.length}<span className="text-slate-600 text-sm">/20</span></span>
+                 <span className="text-2xl font-black text-white font-mono">{longrunEfficiencyData.length}<span className="text-slate-600 text-sm">/{longRunTarget}</span></span>
               </div>
               <div className="flex justify-between items-end border-b border-slate-800/50 pb-3">
                  <div className="space-y-0.5">
                     <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Global Efficiency</span>
-                    <div className="text-sm font-mono text-slate-400">Engine Output Factor</div>
+                    <div className="text-sm font-mono text-slate-400">Target: {requiredWeeklyVolume}km/week ({goalDisplay})</div>
                  </div>
                  <span className="text-2xl font-black text-emerald-400 font-mono">
                    {((longrunEfficiencyData.reduce((acc, curr) => acc + curr, 0) / Math.max(1, longrunEfficiencyData.length)) * 1.2).toFixed(2)}
@@ -518,11 +536,23 @@ function LabContent() {
               <div className="flex justify-between items-center">
                  <div className="space-y-0.5">
                     <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Campaign Phase</span>
-                    <div className="text-sm font-mono text-slate-400">Completion Velocity</div>
+                    <div className="text-sm font-mono text-slate-400">Blueprint Probability ({goalDisplay})</div>
                  </div>
                  <div className="text-right">
-                    <span className="text-2xl font-black text-blue-400 font-mono">72%</span>
-                    <div className="text-[8px] text-blue-500/60 font-black uppercase">On Schedule</div>
+                    <span className={`text-2xl font-black font-mono ${
+                      blueprintProbability >= 70 ? 'text-emerald-400' : 
+                      blueprintProbability >= 50 ? 'text-blue-400' : 
+                      'text-amber-400'
+                    }`}>{blueprintProbability}%</span>
+                    <div className={`text-[8px] font-black uppercase ${
+                      blueprintProbability >= 70 ? 'text-emerald-500/60' : 
+                      blueprintProbability >= 50 ? 'text-blue-500/60' : 
+                      'text-amber-500/60'
+                    }`}>
+                      {blueprintProbability >= 70 ? 'On Track' : 
+                       blueprintProbability >= 50 ? 'At Risk' : 
+                       'Off Track'}
+                    </div>
                  </div>
               </div>
            </div>

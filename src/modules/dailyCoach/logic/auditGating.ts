@@ -7,6 +7,8 @@ export interface AuditGatingInput {
   fuelingTarget: number | null;
   fuelingCarbsPerHour: number | null;
   fuelingGiDistress: number | null;
+  // Historical context for automatic fueling audit triggers
+  hasHistoricalLongRunWithoutFueling?: boolean; // Set to true if history checker found missing fueling
 }
 
 export interface AuditGatingOutput {
@@ -57,8 +59,11 @@ export function checkAuditGating(input: AuditGatingInput): AuditGatingOutput {
     if (!auditType) auditType = 'STRENGTH';
   }
   
-  // Check fueling (required if long run or high target)
-  const fuelingRequired = lastRunDuration > 90 || (fuelingTarget !== null && fuelingTarget > 90);
+  // Check fueling (required if long run, high target, or historical long run without fueling)
+  // Roadmap requirement: "Automatically prompt for Carbs/hr and GI Distress for any activity >90min in history stream"
+  const fuelingRequired = lastRunDuration > 90 || 
+                         (fuelingTarget !== null && fuelingTarget > 90) ||
+                         input.hasHistoricalLongRunWithoutFueling === true;
   if (fuelingRequired) {
     if (fuelingCarbsPerHour === null || fuelingCarbsPerHour === undefined) {
       missingInputs.push('Fueling carbs per hour');

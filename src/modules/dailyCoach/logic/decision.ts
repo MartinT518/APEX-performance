@@ -32,6 +32,13 @@ export interface MetabolicData {
   rollingTonnage?: number;
   rollingMileage?: number;
   sleepQuality?: number;
+  // P0 Fix: Accept structural data from database
+  structuralData?: {
+    niggleScore?: number;
+    daysSinceLastLift?: number;
+    lastLiftTier?: 'maintenance' | 'hypertrophy' | 'strength' | 'power' | 'explosive';
+    currentWeeklyVolume?: number;
+  };
 }
 
 /**
@@ -79,7 +86,9 @@ export async function generateDailyPlan(
       currentHRV: metabolicData?.currentHRV,
       planLimitRedZone: metabolicData?.planLimitRedZone || 10
     },
-    sessionHistory: metabolicData?.sessionHistory
+    sessionHistory: metabolicData?.sessionHistory,
+    // P0 Fix: Pass structural data from database if provided
+    structuralData: metabolicData?.structuralData
   });
 
   const structuralVote = await evaluateStructuralHealth(sessionSummary.structural);

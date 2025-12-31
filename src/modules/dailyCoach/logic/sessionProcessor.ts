@@ -186,7 +186,7 @@ export async function processSessionData(
   clippingDiagnostics.flaggedIndices.forEach(idx => allFlaggedIndices.add(idx));
   
   // 4. Cadence lock (with phenotype awareness)
-  const cadenceLockDiagnostics = detectCadenceLock(sessionPoints, profile);
+  const cadenceLockDiagnostics = await detectCadenceLock(sessionPoints, profile);
   const cadenceLockDetected = cadenceLockDiagnostics.flaggedIndices.length > 0;
   logger.info(`Cadence Lock Check: ${cadenceLockDiagnostics.status} (${cadenceLockDiagnostics.flaggedIndices.length} points flagged)`);
   cadenceLockDiagnostics.flaggedIndices.forEach(idx => allFlaggedIndices.add(idx));

@@ -41,8 +41,8 @@ function PlanContent() {
 
   const loadPastSessions = async () => {
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const userId = session?.session?.user?.id;
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
       
       if (!userId) {
         logger.warn('No user ID found when loading past sessions');
@@ -111,10 +111,26 @@ function PlanContent() {
       console.log('[Tactical Map] Starting loadPlanData...');
       logger.info('Loading plan data for tactical map');
 
-      const { data: session } = await supabase.auth.getSession();
-      const userId = session?.session?.user?.id;
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      const accessToken = session?.access_token;
+      const refreshToken = session?.refresh_token;
       
-      const result = await runCoachAnalysis(userId);
+      console.log('[Tactical Map] Client session:', {
+        hasSession: !!session,
+        userId,
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
+        accessTokenLength: accessToken?.length
+      });
+      
+      // Pass userId, accessToken, and refreshToken to server action
+      // The tokens will be used to set the session on the server client
+      const result = await runCoachAnalysis(
+        userId || undefined, 
+        accessToken || undefined,
+        refreshToken || undefined
+      );
       console.log('[Tactical Map] runCoachAnalysis result:', {
         success: result.success,
         hasDecision: !!result.decision,
@@ -256,14 +272,27 @@ function PlanContent() {
           </button>
           <button 
             onClick={async () => {
+              // Get session tokens from client-side Supabase
+              const { data: { session } } = await supabase.auth.getSession();
+              const userId = session?.user?.id;
+              const accessToken = session?.access_token;
+              const refreshToken = session?.refresh_token;
+              
               // Dynamic import to avoid client-side issues if action is strict server
               const { generateEliteWeek } = await import('./actions');
-              const result = await generateEliteWeek("2:59:59"); // Default goal for now
-              if (result.success && result.blueprint) {
-                console.log("Elite Blueprint:", result.blueprint);
-                alert("Generated! Check console for JSON (UI integration pending)");
-              } else {
-                alert("Failed: " + result.message);
+              try {
+                // Get goal time from profile if available, otherwise let server use profile default
+              const result = await generateEliteWeek(undefined, accessToken || undefined, refreshToken || undefined);
+                if (result.success && result.blueprint) {
+                  console.log("Elite Blueprint:", JSON.stringify(result.blueprint, null, 2));
+                  alert("Generated! Check console for JSON (UI integration pending)");
+                } else {
+                  console.error("Elite plan generation failed:", result.message);
+                  alert("Failed: " + (result.message || "Unknown error"));
+                }
+              } catch (err: any) {
+                console.error("Elite plan generation error:", err);
+                alert("Error: " + (err?.message || "Unknown error occurred"));
               }
             }}
             className="ml-2 bg-slate-900 p-2.5 rounded-xl border border-slate-800 text-slate-400 hover:text-amber-500 hover:border-amber-500/50 transition-all shadow-lg"

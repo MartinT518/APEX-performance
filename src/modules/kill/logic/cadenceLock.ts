@@ -1,4 +1,6 @@
 import { CADENCE_LOCK_SYSTEM_PROMPT } from '../prompts/cadenceLockPrompt';
+import type { ISessionDataPoint, IFilterDiagnostics } from '@/types/session';
+import type { IPhenotypeProfile } from '@/types/phenotype';
 
 export interface CadenceLockResult {
   is_cadence_lock: boolean;
@@ -66,5 +68,59 @@ export class CadenceLockDetector {
       // Fail open (assume data is valid if check fails)
       return { is_cadence_lock: false, confidence: 0, explanation: "Check failed" };
     }
+  }
+}
+
+/**
+ * Wrapper function that matches the IFilterDiagnostics interface
+ * Used by sessionProcessor for consistency with other detect functions
+ */
+export async function detectCadenceLock(
+  points: ISessionDataPoint[],
+  profile?: IPhenotypeProfile
+): Promise<IFilterDiagnostics> {
+  // Convert ISessionDataPoint[] to format expected by CadenceLockDetector
+  const samples = points
+    .filter(p => p.heartRate !== undefined && p.cadence !== undefined)
+    .map(p => ({
+      timestamp: new Date(p.timestamp * 1000).toISOString(),
+      hr: p.heartRate!,
+      cadence: p.cadence!
+    }));
+
+  if (samples.length === 0) {
+    return {
+      status: 'VALID',
+      reason: undefined,
+      flaggedIndices: [],
+      originalPointCount: points.length,
+      validPointCount: points.length
+    };
+  }
+
+  try {
+    const result = await CadenceLockDetector.detectCadenceLock(samples);
+    
+    // If cadence lock detected, flag all points (since we can't determine which specific points are affected)
+    const flaggedIndices = result.is_cadence_lock && result.confidence > 0.7
+      ? points.map((_, idx) => idx)
+      : [];
+
+    return {
+      status: result.is_cadence_lock && result.confidence > 0.7 ? 'SUSPECT' : 'VALID',
+      reason: result.is_cadence_lock ? result.explanation : undefined,
+      flaggedIndices,
+      originalPointCount: points.length,
+      validPointCount: points.length - flaggedIndices.length
+    };
+  } catch (error) {
+    // Fail open - assume data is valid if check fails
+    return {
+      status: 'VALID',
+      reason: undefined,
+      flaggedIndices: [],
+      originalPointCount: points.length,
+      validPointCount: points.length
+    };
   }
 }

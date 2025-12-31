@@ -6,12 +6,17 @@
 
 import type { PhaseDefinition, IntensityZone } from '@/types/workout';
 import type { TonnageTier } from '@/modules/monitor/monitorStore';
+import { goalTimeToMetric, getRequiredWeeklyVolume, formatGoalTimeDisplay } from './utils/goalTime';
+import { logger } from '@/lib/logger';
 
 interface IMonteCarloInput {
   currentLoad: number;
   injuryRiskScore: number; // 0-1
   goalMetric: number; // e.g. Target Time or Power
   daysRemaining: number;
+  historicalVolume?: number[]; // Real historical volume data
+  niggleTrend?: number[]; // Recent niggle scores for injury risk
+  daysSinceLastLift?: number; // Strength compliance
 }
 
 interface IMonteCarloResult {
@@ -47,32 +52,123 @@ import { linearRegression, linearRegressionLine } from 'simple-statistics';
  * Enhanced: Uses Linear Regression to determine trajectory.
  */
 export const runMonteCarloSimulation = (input: IMonteCarloInput): IMonteCarloResult => {
-  const { currentLoad, injuryRiskScore, goalMetric, daysRemaining } = input;
+  const { currentLoad, injuryRiskScore, goalMetric, daysRemaining, historicalVolume, niggleTrend, daysSinceLastLift } = input;
   const simulations = 1000;
   let successCount = 0;
   
-  // Create a synthetic history for regression based on current load
-  // In a real scenario, this would take the array of 'history' as input
-  // For now, we project a line from 0 to currentLoad over 30 days
-  const syntheticHistory = Array.from({ length: 30 }, (_, i) => [i, (currentLoad/30) * i]); // Linear ramp
+  // P1 Fix: Provide conservative estimate when insufficient historical data
+  // Instead of returning 0%, calculate a conservative baseline estimate
+  if (!historicalVolume || historicalVolume.length < 7) {
+    logger.warn('Insufficient historical data for Monte Carlo simulation', {
+      dataPoints: historicalVolume?.length || 0,
+      required: 7
+    });
+    
+    // Calculate conservative estimate based on available data
+    const availableDataPoints = historicalVolume?.length || 0;
+    const hasAnyData = availableDataPoints > 0;
+    
+    // Conservative probability calculation for limited data:
+    // Base probability factors:
+    // 1. Data availability (0-6 days): More data = higher confidence
+    // 2. Days remaining: More days = more opportunity (but cap the benefit)
+    // 3. Injury risk: Higher risk = lower probability
+    // 4. Current load: Having any load is better than none
+    
+    // Data confidence factor: 0-1 scale based on available data points
+    const dataConfidenceFactor = Math.min(1, availableDataPoints / 7); // 0-1 scale
+    
+    // Days remaining factor: More days is better, but diminishing returns
+    // Cap the benefit at 180 days (6 months)
+    const daysFactor = Math.min(1, daysRemaining / 180);
+    
+    // Injury risk penalty: Higher risk reduces probability
+    const riskPenalty = Math.min(0.6, injuryRiskScore * 0.6); // Max 60% reduction
+    
+    // Base probability calculation:
+    // - Start with 30% base (conservative but not zero)
+    // - Add up to 20% for data availability
+    // - Add up to 15% for days remaining
+    // - Subtract up to 60% for injury risk
+    const baseProbability = 30;
+    const dataBonus = dataConfidenceFactor * 20; // Up to 20% for having data
+    const daysBonus = daysFactor * 15; // Up to 15% for having time
+    const riskReduction = baseProbability * riskPenalty;
+    
+    const calculatedProbability = baseProbability + dataBonus + daysBonus - riskReduction;
+    
+    // Ensure minimum probability based on data availability
+    // If we have any data, provide at least 10% (shows we're tracking)
+    // If no data, provide 5% (very conservative)
+    const finalProbability = hasAnyData 
+      ? Math.max(10, Math.min(50, calculatedProbability)) // Cap at 50% for limited data
+      : Math.max(5, Math.min(30, calculatedProbability)); // Cap at 30% for no data
+    
+    return {
+      successProbability: finalProbability,
+      projectedMetrics: [],
+      confidenceScore: 'LOW' as const
+    };
+  }
   
-  // Calculate Slope (Growth Rate)
-  const regression = linearRegression(syntheticHistory);
-  const predict = linearRegressionLine(regression);
+  // Create history for regression using real historical data
+  const regressionData = historicalVolume.map((v, i) => [i, v]);
+  
+  // Calculate Slope (Growth Rate) from real data
+  const regression = linearRegression(regressionData);
   const projectedSlope = regression.m;
 
+  // Calculate actual variance from historical data if available
+  let historicalVariance = 0.1; // Default 10% variance
+  if (historicalVolume && historicalVolume.length > 7) {
+    // Calculate coefficient of variation from last 7 data points
+    const recent = historicalVolume.slice(-7);
+    const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
+    const variance = recent.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / recent.length;
+    const stdDev = Math.sqrt(variance);
+    historicalVariance = mean > 0 ? stdDev / mean : 0.1; // Coefficient of variation
+  }
+
+  // Enhanced injury risk model
+  let enhancedInjuryRisk = injuryRiskScore;
+  
+  // Check for load spikes (volume increase >20% week-over-week)
+  if (historicalVolume && historicalVolume.length >= 14) {
+    const lastWeek = historicalVolume.slice(-7).reduce((a, b) => a + b, 0);
+    const prevWeek = historicalVolume.slice(-14, -7).reduce((a, b) => a + b, 0);
+    if (prevWeek > 0 && (lastWeek / prevWeek) > 1.2) {
+      enhancedInjuryRisk = Math.min(1.0, enhancedInjuryRisk + 0.2); // +20% risk for load spike
+    }
+  }
+  
+  // Check niggle trend (increasing pain = higher risk)
+  if (niggleTrend && niggleTrend.length >= 3) {
+    const recentNiggle = niggleTrend.slice(-3);
+    const avgNiggle = recentNiggle.reduce((a, b) => a + b, 0) / recentNiggle.length;
+    if (avgNiggle > 4) {
+      enhancedInjuryRisk = Math.min(1.0, enhancedInjuryRisk + (avgNiggle - 4) * 0.1); // +10% per point over 4
+    }
+  }
+  
+  // Check strength compliance (days since last lift)
+  if (daysSinceLastLift !== undefined && daysSinceLastLift > 7) {
+    enhancedInjuryRisk = Math.min(1.0, enhancedInjuryRisk + 0.15); // +15% risk if no lift in 7+ days
+  }
+
   for (let i = 0; i < simulations; i++) {
-    // Random variance factor (0.9 to 1.1)
-    const variance = 0.9 + (Math.random() * 0.2);
+    // Use actual historical variance instead of arbitrary 0.9-1.1
+    // Apply normal distribution around 1.0 with historical variance
+    const variance = 1.0 + ((Math.random() + Math.random() + Math.random() + Math.random() - 2) / 2) * historicalVariance;
     
-    // Risk event (Probability checks against risk score)
-    const riskEventOccurred = Math.random() < (injuryRiskScore * 0.5); 
+    // Enhanced risk event calculation
+    const riskEventOccurred = Math.random() < (enhancedInjuryRisk * 0.5); 
     
     let finalValue = currentLoad;
     
     if (riskEventOccurred) {
-      // Injury setback: Lose progress
-      finalValue = currentLoad * 0.5; 
+      // Injury setback: Lose progress (severity based on risk level)
+      const setbackSeverity = enhancedInjuryRisk > 0.7 ? 0.4 : 0.6; // More severe if higher risk
+      finalValue = currentLoad * setbackSeverity; 
     } else {
       // Growth model: Slope * Days Remaining * Variance
       // dP = Slope * Days
@@ -87,12 +183,16 @@ export const runMonteCarloSimulation = (input: IMonteCarloInput): IMonteCarloRes
 
   const probability = (successCount / simulations) * 100;
   
+  // Architectural Constraint: Never promise 100% certainty. 
+  // High-Rev athlete always carries structural risk.
+  const cappedProbability = Math.min(85, probability);
+
   let confidence: 'LOW' | 'MEDIUM' | 'HIGH' = "LOW";
-  if (probability > 80) confidence = "HIGH";
-  else if (probability > 50) confidence = "MEDIUM";
+  if (cappedProbability > 80) confidence = "HIGH";
+  else if (cappedProbability > 50) confidence = "MEDIUM";
 
   return {
-    successProbability: probability,
+    successProbability: cappedProbability,
     projectedMetrics: [],
     confidenceScore: confidence
   };
@@ -202,42 +302,48 @@ export function applyIntensityVeto(
 
 /**
  * Step 10 (REVISED): Monte Carlo Volume Calibration
- * Compares Safety Path vs Performance Path for Sub-2:30 goal
+ * Compares Safety Path vs Performance Path for goal time
  */
 export function runVolumeCalibrationSimulation(
   currentVolume: number,
   currentTonnageTier: TonnageTier | undefined,
-  structuralIntegrityScore: number
+  structuralIntegrityScore: number,
+  goalTime: string = '2:30:00' // Default to 2:30:00 if not provided
 ): VolumeCalibrationResult {
+  const goalMetric = goalTimeToMetric(goalTime);
+  const requiredVolume = getRequiredWeeklyVolume(goalTime);
+  const goalDisplay = formatGoalTimeDisplay(goalTime);
+  const safetyVolume = Math.round(requiredVolume * 0.8); // 80% of required volume
+  
   // Run two scenarios:
-  // 1. Safety Path: Low volume (100km/week), high intensity
+  // 1. Safety Path: Low volume (80% of required), high intensity
   const safetyPath = runMonteCarloSimulation({
-    currentLoad: 100, // km/week
+    currentLoad: safetyVolume,
     injuryRiskScore: 0.3, // Lower risk with lower volume
-    goalMetric: 150, // Sub-2:30 equivalent (arbitrary scale)
+    goalMetric,
     daysRemaining: 280
   });
   
-  // 2. Performance Path: High volume (140km/week), high intensity, requires Power tier
+  // 2. Performance Path: Full required volume, high intensity, requires Power tier
   const performancePath = runMonteCarloSimulation({
-    currentLoad: 140, // km/week (required for Sub-2:30)
+    currentLoad: requiredVolume, // Required volume for goal time
     injuryRiskScore: structuralIntegrityScore < 80 ? 0.7 : 0.3, // High risk if SIS < 80
-    goalMetric: 150,
+    goalMetric,
     daysRemaining: 280
   });
   
   const recommendation = currentTonnageTier !== 'power' && currentTonnageTier !== 'strength'
-    ? "To hit Sub-2:30, your mechanical volume must reach 140km/week. This requires 2x 'Power' Tier lift sessions per week to protect the chassis."
-    : "Performance path available. Maintain Power/Strength tier to support 140km/week volume.";
+    ? `To hit ${goalDisplay}, your mechanical volume must reach ${requiredVolume}km/week. This requires 2x 'Power' Tier lift sessions per week to protect the chassis.`
+    : `Performance path available. Maintain Power/Strength tier to support ${requiredVolume}km/week volume.`;
   
   return {
     safetyPath: {
-      volume: 100,
+      volume: safetyVolume,
       intensity: 'high',
       probability: safetyPath.successProbability
     },
     performancePath: {
-      volume: 140,
+      volume: requiredVolume,
       intensity: 'high',
       tonnageRequirement: "2x Power Tier lifts per week",
       probability: performancePath.successProbability

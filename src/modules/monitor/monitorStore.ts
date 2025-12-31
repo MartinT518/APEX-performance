@@ -183,23 +183,22 @@ export const useMonitorStore = create<MonitorState>()(
           weekStart.setHours(0, 0, 0, 0);
           const weekStartStr = weekStart.toISOString().split('T')[0];
 
-          // Query running sessions in current week
+          // Query running sessions in current week (include metadata for distance/pace)
           const { data: sessions } = await supabase
             .from('session_logs')
-            .select('duration_minutes')
+            .select('id, duration_minutes, metadata')
             .eq('user_id', userId)
             .eq('sport_type', 'RUNNING')
-            .gte('session_date', weekStartStr)
             .gte('session_date', weekStartStr)
             .lte('session_date', new Date().toISOString().split('T')[0]) as any;
 
           if (!sessions) return 0;
 
-
-          // Convert duration to km (approximate: 1km ≈ 5 minutes for easy pace)
-          // This is a rough estimate; in production, use actual distance from metadata if available
-          const totalMinutes = sessions.reduce((sum: number, s: any) => sum + (s.duration_minutes || 0), 0);
-          const weeklyKm = totalMinutes / 5; // Rough conversion
+          // Use calculateDistanceFromSession helper to get accurate distance
+          const { calculateDistanceFromSession } = await import('./utils/volumeCalculator');
+          const weeklyKm = sessions.reduce((sum: number, s: any) => {
+            return sum + calculateDistanceFromSession(s);
+          }, 0);
 
           return Math.round(weeklyKm * 10) / 10; // Round to 1 decimal
         } catch (err) {

@@ -98,6 +98,9 @@ export async function loadLabData(): Promise<LabData> {
       weeklyMap.set(weekKey, existing);
     });
 
+    // Import volume calculator helper
+    const { calculateDistanceFromSession } = await import('@/modules/monitor/utils/volumeCalculator');
+    
     sessions.forEach((session: any) => {
       const date = new Date(session.session_date);
       const weekStart = new Date(date);
@@ -105,8 +108,7 @@ export async function loadLabData(): Promise<LabData> {
       const weekKey = weekStart.toISOString().split('T')[0];
       
       const existing = weeklyMap.get(weekKey) || { tonnage: 0, runningVolume: 0 };
-      const metadata = (session.metadata as Record<string, any>) || {};
-      const distance = metadata.distance || ((session.duration_minutes || 0) / 5);
+      const distance = calculateDistanceFromSession(session);
       existing.runningVolume += distance;
       weeklyMap.set(weekKey, existing);
     });
@@ -197,7 +199,7 @@ export async function loadLabData(): Promise<LabData> {
       .filter(session => (session.duration_minutes || 0) > 90)
       .map(session => {
         const metadata = (session.metadata as Record<string, any>) || {};
-        const distance = metadata.distance || ((session.duration_minutes || 0) / 5);
+        const distance = calculateDistanceFromSession(session);
         const avgHR = metadata.avgHR || 150;
         const maxHR = metadata.maxHR || 190;
         const efficiency = (distance / (session.duration_minutes || 1)) / (avgHR / maxHR);

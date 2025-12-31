@@ -6,12 +6,32 @@ import { logger } from "@/lib/logger";
 
 export async function getBiometricNarrative() {
   try {
-    const supabase = createServerClient();
-    const { data: session } = await supabase.auth.getSession();
-    const userId = session?.session?.user?.id;
+    const supabase = await createServerClient();
+    
+    // Try getUser first (more reliable with Authorization header)
+    let userId: string | undefined;
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError) {
+      // If getUser fails, try getSession as fallback
+      logger.warn("getUser() failed, trying getSession():", userError.message);
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        logger.error("Session error:", sessionError);
+      } else {
+        userId = session?.user?.id;
+      }
+    } else {
+      userId = user?.id;
+    }
     
     if (!userId) {
-      return { success: false, message: "Not authenticated" };
+      // Gracefully return empty result instead of error during SSR
+      return { 
+        success: true, 
+        narrative: null,
+        message: "Not authenticated - please log in to view biometric narrative" 
+      };
     }
 
     // Fetch last 7 days of monitoring data

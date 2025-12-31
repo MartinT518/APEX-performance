@@ -40,7 +40,33 @@ export async function updateProfileConfig(
   if (error) throw error;
   if (!data) throw new Error('Update returned no data');
 
-  return mapRowToProfile(data);
+  const updatedProfile = mapRowToProfile(data);
+
+  // FR-5.5: Invalidate future snapshots when phenotype changes
+  // Check if any phenotype-affecting fields changed
+  const phenotypeAffectingFields = ['max_hr_override', 'threshold_hr_known', 'anaerobic_floor_hr', 'structural_weakness', 'lift_days_required'];
+  const hasPhenotypeChange = phenotypeAffectingFields.some(field => {
+    const oldValue = (profile.config as any)[field];
+    const newValue = (updatedProfile.config as any)[field];
+    return JSON.stringify(oldValue) !== JSON.stringify(newValue);
+  });
+
+  if (hasPhenotypeChange) {
+    try {
+      // Import server action to invalidate future snapshots
+      const { invalidateFutureSnapshots } = await import('@/app/actions');
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      const refreshToken = session?.refresh_token;
+      await invalidateFutureSnapshots(accessToken || undefined, refreshToken || undefined);
+      console.log('Invalidated future snapshots due to phenotype change');
+    } catch (err) {
+      // Log but don't fail the update if invalidation fails
+      console.warn('Failed to invalidate future snapshots after phenotype update:', err);
+    }
+  }
+
+  return updatedProfile;
 }
 
 /**
@@ -74,6 +100,25 @@ export async function toggleHighRevMode(
   if (error) throw error;
   if (!data) throw new Error('Update returned no data');
 
-  return mapRowToProfile(data);
+  const updatedProfile = mapRowToProfile(data);
+
+  // FR-5.5: Invalidate future snapshots when High-Rev mode changes
+  // High-Rev mode affects HR zone calculations, so future decisions need regeneration
+  if (profile.is_high_rev !== enabled) {
+    try {
+      // Import server action to invalidate future snapshots
+      const { invalidateFutureSnapshots } = await import('@/app/actions');
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      const refreshToken = session?.refresh_token;
+      await invalidateFutureSnapshots(accessToken || undefined, refreshToken || undefined);
+      console.log('Invalidated future snapshots due to High-Rev mode change');
+    } catch (err) {
+      // Log but don't fail the update if invalidation fails
+      console.warn('Failed to invalidate future snapshots after High-Rev toggle:', err);
+    }
+  }
+
+  return updatedProfile;
 }
 

@@ -193,6 +193,8 @@ function HistoryContent() {
     try {
       const { data: session } = await supabase.auth.getSession();
       const userId = session?.session?.user?.id;
+      const accessToken = session?.session?.access_token;
+      const refreshToken = session?.session?.refresh_token;
       
       if (!userId) {
         setSyncMessage('Please log in to sync Garmin data.');
@@ -208,8 +210,9 @@ function HistoryContent() {
       const result = await syncGarminSessions(
         startDate.toISOString().split('T')[0],
         endDate.toISOString().split('T')[0],
-        userId,
-        forceUpdate // Force update if requested
+        forceUpdate, // Force update if requested
+        accessToken || undefined,
+        refreshToken || undefined
       );
 
       if (result.inCooldown && result.minutesRemaining) {

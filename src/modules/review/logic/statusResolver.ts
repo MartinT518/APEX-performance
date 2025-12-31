@@ -3,6 +3,10 @@ import type { IAgentVote } from '@/types/agents';
 export interface StatusResolverInput {
   votes: IAgentVote[];
   niggleScore: number;
+  zScoreContext?: {
+    hrvZScore: number | null;
+    sleepDebtHours: number | null;
+  };
 }
 
 export interface StatusResolverOutput {
@@ -21,14 +25,17 @@ export interface StatusResolverOutput {
  * Pure function that resolves daily status from agent votes
  * 
  * Rules:
- * - SHUTDOWN: Multiple RED votes OR (Structural RED + Metabolic RED)
+ * - SHUTDOWN: Multiple RED votes OR (Structural RED + Metabolic RED) OR (HRV Z-Score < -1.5 AND Sleep Debt > 4h)
  * - ADAPTED: Single RED vote (any agent) OR structural RED triggers substitution
  * - GO: All GREEN or only AMBER votes
  * 
  * Must be pure (no side effects, no zustand)
+ * 
+ * Historical Normalization: Uses Z-scores based on 42-day rolling window from 7-year dataset.
+ * Z-score formula: z = (x - μ) / σ
  */
 export function resolveDailyStatus(input: StatusResolverInput): StatusResolverOutput {
-  const { votes, niggleScore } = input;
+  const { votes, niggleScore, zScoreContext } = input;
   
   // Extract votes by agent
   const structuralVote = votes.find(v => v.agentId === 'structural_agent');
@@ -70,11 +77,24 @@ export function resolveDailyStatus(input: StatusResolverInput): StatusResolverOu
   let reason: string;
   let substitutions_suggested = false;
   
-  // SHUTDOWN: Multiple REDs OR (Structural RED + Metabolic RED)
-  if (redVotes.length > 1 || (structuralRed && metabolicRed)) {
+  // Check Z-score based shutdown condition (Historical Normalization)
+  // Acceptance Criteria: SHUTDOWN when HRV Z-Score < -1.5 AND Sleep Debt > 4h
+  const zScoreShutdown = zScoreContext && 
+    zScoreContext.hrvZScore !== null && 
+    zScoreContext.sleepDebtHours !== null &&
+    zScoreContext.hrvZScore < -1.5 && 
+    zScoreContext.sleepDebtHours > 4;
+  
+  // SHUTDOWN: Multiple REDs OR (Structural RED + Metabolic RED) OR Z-score condition
+  if (redVotes.length > 1 || (structuralRed && metabolicRed) || zScoreShutdown) {
     global_status = 'SHUTDOWN';
-    const redAgents = redVotes.map(v => v.agentId.replace('_agent', '')).join(' + ');
-    reason = `System Shutdown: Multiple critical flags (${redAgents}). Complete rest required.`;
+    
+    if (zScoreShutdown) {
+      reason = `System Shutdown: Critical physiological markers detected. HRV Z-Score: ${zScoreContext!.hrvZScore!.toFixed(2)} (below -1.5), Sleep Debt: ${zScoreContext!.sleepDebtHours!.toFixed(1)}h (above 4h). Complete rest required.`;
+    } else {
+      const redAgents = redVotes.map(v => v.agentId.replace('_agent', '')).join(' + ');
+      reason = `System Shutdown: Multiple critical flags (${redAgents}). Complete rest required.`;
+    }
   }
   // ADAPTED: Single RED vote (any agent)
   else if (redVotes.length === 1) {

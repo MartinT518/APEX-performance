@@ -2,6 +2,7 @@
 
 import { ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { formatGoalTimeDisplay } from '@/modules/analyze/utils/goalTime';
 
 interface MacroContextBarProps {
   certaintyScore: number; // 0-100
@@ -9,6 +10,7 @@ interface MacroContextBarProps {
   phase?: string;
   phaseFocus?: string;
   trendData?: Array<{ date: string; score: number }>; // For sparkline
+  goalTime?: string; // Goal marathon time (e.g., "2:20:00")
 }
 
 export function MacroContextBar({ 
@@ -16,8 +18,10 @@ export function MacroContextBar({
   previousCertainty, 
   phase = "Phase 2: Metabolic Hybrid Block",
   phaseFocus = "Focus: Lactate Clearance & Chassis Hardening",
-  trendData 
+  trendData,
+  goalTime = '2:30:00'
 }: MacroContextBarProps) {
+  const goalDisplay = formatGoalTimeDisplay(goalTime);
   // Calculate trend
   let trendIcon = <Minus className="h-4 w-4 text-zinc-500" />;
   let trendText = '';
@@ -55,7 +59,7 @@ export function MacroContextBar({
             )}
           </div>
           <div className="text-sm text-zinc-400">
-            Probability of Sub-2:30
+            Probability of {goalDisplay}
           </div>
           
           {/* Sparkline */}

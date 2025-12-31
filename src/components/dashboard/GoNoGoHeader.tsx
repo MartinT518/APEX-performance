@@ -2,19 +2,22 @@
 
 import { IAnalysisResult } from '@/types/analysis';
 import { ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { formatGoalTimeDisplay } from '@/modules/analyze/utils/goalTime';
 
 interface GoNoGoHeaderProps {
   result: IAnalysisResult | null;
   previousCertainty?: number; // For trend calculation
+  goalTime?: string; // Goal marathon time (e.g., "2:20:00")
 }
 
-export function GoNoGoHeader({ result, previousCertainty }: GoNoGoHeaderProps) {
+export function GoNoGoHeader({ result, previousCertainty, goalTime = '2:30:00' }: GoNoGoHeaderProps) {
   if (!result || !result.decision) {
     return null;
   }
 
   const decision = result.decision;
   const certainty = result.simulation?.successProbability || 0;
+  const goalDisplay = formatGoalTimeDisplay(goalTime);
   
   // Determine status from decision action
   let status: 'GO' | 'ADAPTED' | 'SHUTDOWN' = 'GO';
@@ -72,7 +75,7 @@ export function GoNoGoHeader({ result, previousCertainty }: GoNoGoHeaderProps) {
             {trendIcon}
           </div>
           <div className="text-sm text-zinc-400">
-            Probability of Sub-2:30
+            Probability of {goalDisplay}
           </div>
           {trendText && (
             <div className="text-xs text-zinc-500">

@@ -3,6 +3,7 @@ import { runMonteCarloSimulation } from '../../analyze/blueprintEngine';
 import { logger } from '@/lib/logger';
 import { analyzeTacticalHistory } from '../../analyze/plannerEngine';
 import type { PrototypeSessionDetail } from '@/types/prototype';
+import { goalTimeToMetric } from '../../analyze/utils/goalTime';
 
 export interface AnalysisResult {
   baselines: {
@@ -22,7 +23,8 @@ export interface AnalysisResult {
 export async function runAnalysis(
   currentHRV: number,
   currentTonnage: number,
-  history: PrototypeSessionDetail[]
+  history: PrototypeSessionDetail[],
+  goalTime: string = '2:30:00' // Default to 2:30:00 if not provided
 ): Promise<AnalysisResult> {
   logger.info(">> Step 4: Analysis & Baserunning");
   
@@ -49,21 +51,50 @@ export async function runAnalysis(
   const injuryRiskScore = (analysis.niggleScore / 10) * 0.5 + (analysis.integrityRatio < 0.8 ? 0.3 : 0);
 
   // Extract history for trajectory
-  const historicalVolume = history.map(s => {
-    if (s.type === 'EXEC' || s.type === 'SUB') {
-      const distMatch = s.duration.match(/(\d+)h\s*(\d+)m/);
-      // Rough km estimate if distance missing
-      return s.distance || (distMatch ? (parseInt(distMatch[1])*60 + parseInt(distMatch[2]))/5 : 0);
-    }
-    return 0;
-  });
+  // P0 Fix: Use proper distance extraction from PrototypeSessionDetail
+  // The distance field is already populated from metadata in sessionWithVotesToPrototype
+  const historicalVolume = history
+    .filter(s => s.type === 'EXEC' || s.type === 'SUB') // Only running/cycling sessions
+    .map(s => {
+      // Priority 1: Use distance field (already extracted from metadata)
+      if (s.distance && s.distance > 0) {
+        return s.distance;
+      }
+      // Priority 2: Use distanceKm alias
+      if (s.distanceKm && s.distanceKm > 0) {
+        return s.distanceKm;
+      }
+      // If distance not available, return 0 (will be filtered out)
+      return 0;
+    })
+    .filter(d => d > 0); // Remove zero values to get actual training volume
 
+  // Extract niggle trend from history (last 14 days)
+  const niggleTrend = history
+    .slice(-14)
+    .map(s => s.hiddenVariables?.niggle)
+    .filter((n): n is number => n !== undefined && n !== null);
+
+  // Extract days since last lift from history
+  // Find most recent strength session
+  let daysSinceLastLift: number | undefined;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].type === 'STR') {
+      daysSinceLastLift = history.length - 1 - i;
+      break;
+    }
+  }
+
+  const goalMetric = goalTimeToMetric(goalTime);
+  
   const simulation = runMonteCarloSimulation({
     currentLoad: analysis.avgWeeklyVolume, 
     injuryRiskScore: Math.min(1.0, injuryRiskScore),
-    goalMetric: 140, // Sub-2:30 target volume threshold
+    goalMetric, // Goal time-based metric
     daysRemaining,
-    historicalVolume
+    historicalVolume: historicalVolume.length > 0 ? historicalVolume : undefined,
+    niggleTrend: niggleTrend.length > 0 ? niggleTrend : undefined,
+    daysSinceLastLift
   });
   
   logger.info(`Blueprint Confidence: ${simulation.confidenceScore} (${simulation.successProbability.toFixed(1)}%) - ${daysRemaining} days out`);

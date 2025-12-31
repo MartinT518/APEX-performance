@@ -1,5 +1,5 @@
 /**
- * ValuationEngine: Mathematical Logic Layer for "Road to 2:30 Valuation"
+ * ValuationEngine: Mathematical Logic Layer for Goal Time Valuation
  * 
  * Implements three core equations:
  * - Equation A: Smart Adherence Score
@@ -231,7 +231,7 @@ function calculateIntegrityRatio(sessions: PrototypeSessionDetail[], windowDays:
  * - Base_Prob = initial probability (e.g., 50%)
  * - Alpha = volume coefficient (e.g., 0.5)
  * - Vol_Banked = cumulative effective training volume
- * - Vol_Req = required volume for Sub-2:30 goal
+ * - Vol_Req = required volume for goal time
  * - Beta = risk coefficient (e.g., 0.3)
  * - Risk_Penalty = calculated from Integrity Ratio and adherence score
  */
@@ -267,8 +267,9 @@ function calculateBlueprintProbability(
     volReqMultiplier = 0.5; // 50% of target volume (taper)
   }
   
-  // Base required volume for Sub-2:30 (km over training period)
-  const BASE_VOL_REQ = 2000;
+  // Base required volume (km over training period)
+  // Defaults to 2000km for 2:30:00 goal, scales with goal time
+  const BASE_VOL_REQ = 2000; // Can be parameterized based on goal time if needed
   const VOL_REQ = BASE_VOL_REQ * volReqMultiplier;
 
   // Calculate cumulative effective volume

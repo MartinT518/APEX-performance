@@ -25,7 +25,7 @@ export async function syncGarminSessionsToDatabase(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     // Parse date range
     const rangeStart = new Date(startDate);
@@ -372,7 +372,7 @@ export async function syncGarminWellnessToDatabase(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const dates = getDatesInRange(new Date(startDate), new Date(endDate));
     let synced = 0;
     let errors = 0;
